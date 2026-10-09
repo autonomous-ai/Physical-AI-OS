@@ -252,6 +252,7 @@ def test_every_mic_phrase_states_which_way_the_toggle_went():
     cues = {
         "en": ("listen", "hear", "ear"),
         "vi": ("nghe", "tai"),
+        "ja": ("聞", "耳"),
         "zh-CN": ("听", "耳"),
         "zh-TW": ("聽", "耳"),
     }
@@ -278,3 +279,67 @@ def test_a_refused_toggle_says_nothing():
     mute.assert_not_called()
     unmute.assert_not_called()
     assert spoken == [], spoken
+
+
+def test_sleep_announcement_uses_configured_delay():
+    from hal.routes import emotion
+
+    for delay in (0.0, 2.0, 0.5):
+        calls = []
+        with (
+            mock.patch.object(state, "_sleeping", False),
+            mock.patch.object(button_actions, "_tts_available", return_value=True),
+            mock.patch.object(emotion, "harness_blocks_sleep", return_value=False),
+            mock.patch.object(state, "tts_service") as tts,
+            mock.patch.object(button_actions.config, "SLEEP_ANNOUNCEMENT_DELAY_S", delay),
+            mock.patch.object(button_actions.time, "sleep", side_effect=lambda seconds: calls.append(seconds)),
+            mock.patch.object(emotion, "express_emotion", side_effect=lambda *a, **kw: calls.append("sleepy")),
+        ):
+            button_actions.sleep_action("test")
+        tts.speak_cached.assert_called_once()
+        assert calls == [delay, "sleepy"]
+
+
+def test_sleep_without_tts_has_no_announcement_delay():
+    from hal.routes import emotion
+
+    with (
+        mock.patch.object(state, "_sleeping", False),
+        mock.patch.object(button_actions, "_tts_available", return_value=False),
+        mock.patch.object(emotion, "harness_blocks_sleep", return_value=False),
+        mock.patch.object(button_actions.time, "sleep") as wait,
+        mock.patch.object(emotion, "express_emotion") as express,
+    ):
+        button_actions.sleep_action("test")
+    wait.assert_not_called()
+    assert express.call_args.args[0].emotion == "sleepy"
+
+
+def test_scoped_cancel_does_not_wait_for_os(monkeypatch):
+    import threading
+    import time
+
+    entered = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+    sent = []
+
+    def post(url, *, json, timeout):
+        sent.append(json)
+        entered.set()
+        assert release.wait(2)
+        completed.set()
+
+    monkeypatch.setattr(button_actions.requests, "post", post)
+    started = time.monotonic()
+    try:
+        button_actions._cancel_agent_speech("test", before_ms=1791400000000)
+        elapsed = time.monotonic() - started
+        assert entered.wait(1)
+        assert not completed.is_set()
+        assert elapsed < 0.05
+        print(f"scoped cancellation returned in {elapsed * 1000:.3f} ms while OS was blocked")
+        assert sent == [{"before_ms": 1791400000000}]
+    finally:
+        release.set()
+        assert completed.wait(1)

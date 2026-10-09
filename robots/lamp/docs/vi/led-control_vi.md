@@ -1,5 +1,7 @@
 # LED Control — Tài Liệu
 
+Khi presence trở lại từ idle/away, đèn khôi phục theo trạng thái người dùng/đèn nghỉ dùng chung, gồm lựa chọn đèn nghỉ hiện tại và các điều kiện bảo vệ hiệu ứng đang chạy. Presence không giữ cache màu riêng hay khôi phục màu emotion. Khi idle, độ sáng giảm dựa trên màu nền người dùng đã lưu hoặc preset đèn nghỉ hiện tại; lệnh tắt đèn vẫn được giữ nguyên.
+
 Trong lúc thu giọng Harness thủ công, khi recorder/STT sẵn sàng, LED chuyển sang preset listening hiện có (Lamp: xanh dương nhẹ `[0, 0, 3]`, tốc độ `0.3`), kể cả chưa có transcript đầu tiên. Kết thúc, hủy, timeout hoặc lỗi đều xóa trạng thái LED thu và khôi phục theo thứ tự ưu tiên bình thường; thinking/TTS sau đó giữ hành vi hiện có. Cue này chỉ đổi LED, không di chuyển servo hay đổi cài đặt đã lưu.
 
 ## Phần Cứng
@@ -227,7 +229,7 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 3. **Servo hold** — nếu `"servo": "hold"`, giữ servo **sau khi** aim xong (aim → hold trong cùng 1 thread), với chủ sở hữu là `scene`. Không giữ nếu scene đã kết thúc trong lúc tay đèn còn đang di chuyển. Được nhả khi chuyển sang scene không có hold, khi tắt scene, hoặc khi có lệnh LED không transient.
 4. **Camera** — tự động bật/tắt qua `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute dừng voice pipeline (STT), unmute khởi động lại
-6. **Speaker** — `off` dừng nhạc ngay và mute giọng nói theo **drain** (`_start_scene_speaker_drain`, xem `sensing-behavior_vi.md`): câu xác nhận của chính scene, do os-server gửi sau marker `/scene`, vẫn phát xong rồi loa mới đóng; `sleepy` ghép trong cùng reply sẽ tiếp quản drain để wake trả loa lại được. `on` bật lại output. Tắt scene khi privacy đang khoá sẽ đổi snapshot của khoá để lúc nhả loa/camera mở lại (xem `physical-controls_vi.md`).
+6. **Speaker** — `off` dừng nhạc ngay và mute giọng nói theo **drain** (`_start_scene_speaker_drain`, xem `sensing-behavior_vi.md`): câu xác nhận của chính scene, do os-server gửi sau marker `/scene`, vẫn phát xong rồi loa mới đóng; `sleepy` ghép trong cùng reply sẽ huỷ drain và mute ngay, chặn câu xác nhận đến muộn; wake khôi phục mute do sleep sở hữu. `on` bật lại output. Tắt scene khi privacy đang khoá sẽ đổi snapshot của khoá để lúc nhả loa/camera mở lại (xem `physical-controls_vi.md`).
 
 **Chỉ có kích hoạt scene mới aim.** Một lần restore LED — sau emotion, khi TTS kết thúc, khi nhạc
 dừng, khi bỏ mute mic, khi tắt cue lắng nghe — chỉ vẽ lại strip chứ không làm gì khác, và một
@@ -443,8 +445,13 @@ HAL trong cùng lần boot; reboot xóa state boot-scoped và dùng mặc địn
 Sidecar cũ `{"type":"off"}` vẫn được đổi thành không có state.
 
 `led_should_stay_dark()` nhận cả solid đen do user chọn lẫn default tối, để
-TTS/music wave và presence restore tôn trọng tắt đèn. Status và mic-privacy giữ
-ưu tiên hiện tại. Intent `light on` vẫn dùng trắng ấm [255, 220, 180], không lấy
+music wave và presence restore tôn trọng tắt đèn. Trạng thái voice đang hoạt
+động vẫn hiển thị: listening và thinking dùng preset emotion của device dù đã
+lưu tùy chọn tắt đèn; TTS dùng màu listening mờ nếu màu nền là đen. Các luồng
+restore cue/kết thúc/hủy hiện có trả về tùy chọn mới nhất, kể cả off. Không ghi
+đè tùy chọn, không thêm network request hoặc thời gian chờ. Sleep vẫn chặn
+các cue này; mic privacy giữ ưu tiên indicator lúc nghỉ hiện có. Chưa có
+tùy chọn full-blackout riêng. Intent `light on` vẫn dùng trắng ấm [255, 220, 180], không lấy
 preset ambient mờ.
 
 ## LED Trong Emotion

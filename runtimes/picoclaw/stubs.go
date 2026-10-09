@@ -6,6 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"strings"
+	"time"
+
+	"go.autonomous.ai/os/system/server/config"
 
 	"go.autonomous.ai/os/system/domain"
 )
@@ -31,10 +36,19 @@ func (s *PicoclawService) RestartAgent() error {
 	return restartPicoclawGateway()
 }
 
-// RefreshModelsConfig — PicoClaw model config is owned by install.sh/presync.sh
-// (switch-runtime flow); we don't patch it from Device.
+// RefreshModelsConfig reapplies OS-owned LLM settings through the same presync
+// used by installation and runtime switching, then reloads the gateway.
 func (s *PicoclawService) RefreshModelsConfig() error {
-	return domain.ErrNotSupportedByRuntime
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "bash", "-s")
+	cmd.Stdin = strings.NewReader(string(PresyncScript))
+	cmd.Env = append(os.Environ(), "CONFIG_JSON="+config.Path())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		slog.Error("picoclaw presync failed", "error", err, "output", string(output))
+		return fmt.Errorf("apply picoclaw LLM configuration: %w", err)
+	}
+	return restartPicoclawGateway()
 }
 
 // EnsureOnboarding lives in onboarding.go — it keeps the OS-managed block in the
@@ -64,10 +78,9 @@ func (s *PicoclawService) StartModelSync(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// UpdatePrimaryModel — the PicoClaw model registry (config.json model_list) is
-// owned by the runtime's own provisioning, not device-selectable.
+// UpdatePrimaryModel reads the already-saved OS model through presync.
 func (s *PicoclawService) UpdatePrimaryModel(_ string) error {
-	return domain.ErrNotSupportedByRuntime
+	return s.RefreshModelsConfig()
 }
 
 // StartPrimaryModelWatch — no agent-side config file to watch.

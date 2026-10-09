@@ -26,7 +26,7 @@ export function StatusDot({ ok }: { ok: boolean }) {
 // "agent" is a virtual target that os-server resolves to the active runtime's CLI.
 export function SoftwareUpdateButton({ target, label, onTriggered }: {
   target: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent";
-  label: string;
+  label: ReactNode;
   onTriggered?: (target: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -78,7 +78,7 @@ export function SoftwareUpdateButton({ target, label, onTriggered }: {
 }
 
 // Icon-sized restart button for the Agent Gateway card.
-export function RestartAgentButton({ agentName }: { agentName?: string }) {
+export function RestartAgentButton({ agentName, showLabel = false }: { agentName?: string; showLabel?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const trigger = async () => {
@@ -139,7 +139,8 @@ export function RestartAgentButton({ agentName }: { agentName?: string }) {
           e.currentTarget.style.opacity = "0.8";
         }}
       >
-        <RotateCw size={12} className={busy ? "lm-spin-ico" : undefined} />
+        <RotateCw size={14} className={busy ? "lm-spin-ico" : undefined} />
+        {showLabel && <span>{busy ? "Restarting…" : "Restart"}</span>}
       </button>
     </div>
   );

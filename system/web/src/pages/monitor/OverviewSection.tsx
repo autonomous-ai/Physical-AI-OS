@@ -1,8 +1,14 @@
+import { UpdateProgress } from "./UpdateProgress";
+import { isNewUpdate, isTerminalProgress } from "./otaProgress";
+import type { OtaProgress } from "./otaProgress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power } from "lucide-react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power, Download } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
+
+import "./robot-status.css";
+import "./overview.css";
 
 const EMOTION_EMOJI: Record<string, string> = {
   happy: "😊", curious: "🤔", thinking: "💭", sad: "😢", excited: "🤩",
@@ -145,25 +151,71 @@ export function OverviewSection({
   const canUpdate = (target: string) => isDebug && !!otaVersions[target]?.update_available;
 
   const [otaUpdating, setOtaUpdating] = useState<string[]>([]);
+  const [otaProgress, setOtaProgress] = useState<Record<string, OtaProgress>>({});
+  const [otaReconnecting, setOtaReconnecting] = useState(false);
+  const [otaWorkerUnavailable, setOtaWorkerUnavailable] = useState(false);
   const otaUpdatingRef = useRef<string[]>([]);
-  const [justTriggered, setJustTriggered] = useState<Record<string, number>>({});
+  const progressRef = useRef<Record<string, OtaProgress>>({});
+  const unobservedRef = useRef<Record<string, { progress: OtaProgress; previousRun?: string; at: number }>>({});
+  const pendingRef = useRef<Record<string, { at: number; previousRun?: string; acknowledged: boolean }>>({});
+  const [justTriggered, setJustTriggered] = useState<string[]>([]);
   const pokePollRef = useRef<() => void>(() => {});
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const r = await fetch(`${API}/system/ota-updating`);
-        const j = r.ok ? await r.json() : null;
-        const list: string[] = j?.data?.updating ?? [];
+        const r = await fetch(`${API}/system/ota-updating`, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) throw new Error("Update status unavailable");
+        const j = await r.json();
+        if (j.status !== 1 || !Array.isArray(j.data?.updating)) throw new Error("Invalid update status");
+        const list: string[] = j.data.updating;
+        const progress: Record<string, OtaProgress> = j.data.progress ?? {};
+        const workerUnavailable = j.data.bootstrap_available === false;
         if (!cancelled) {
+          if (workerUnavailable) {
+            // A persisted record remains authoritative while the worker restarts.
+            // Missing records in the fallback response cannot prove completion.
+            for (const target of otaUpdatingRef.current) {
+              if (!progress[target] && progressRef.current[target]) progress[target] = progressRef.current[target];
+            }
+          }
+          for (const [target, pending] of Object.entries(pendingRef.current)) {
+            if (list.includes(target)) pending.acknowledged = true;
+            if ((progress[target] && isNewUpdate(progress[target], pending.previousRun))
+              || (!workerUnavailable && pending.acknowledged && !list.includes(target))) delete pendingRef.current[target];
+            else if (!workerUnavailable && !list.includes(target) && Date.now() - pending.at > 30000) {
+              progress[target] = { target, run_id: `unobserved-${pending.at}`, updated_at: Math.floor(Date.now() / 1000), phase: "status_unavailable", message: "The update request was not observed. Check updater logs before retrying." };
+              unobservedRef.current[target] = { progress: progress[target], previousRun: pending.previousRun, at: pending.at };
+              delete pendingRef.current[target];
+            }
+          }
+          for (const [target, unobserved] of Object.entries(unobservedRef.current)) {
+            if (list.includes(target) || (progress[target] && progress[target].run_id !== unobserved.progress.run_id && isNewUpdate(progress[target], unobserved.previousRun))) delete unobservedRef.current[target];
+            else progress[target] = unobserved.progress;
+          }
+          const retainedActive = workerUnavailable ? otaUpdatingRef.current.filter((target) => !progress[target] || !isTerminalProgress(progress[target])) : [];
+          const active = [...new Set([...list, ...retainedActive, ...Object.keys(progress).filter((target) => !isTerminalProgress(progress[target]))])];
           const wasBusy = otaUpdatingRef.current.length > 0;
-          otaUpdatingRef.current = list;
-          setOtaUpdating(list);
-          if (wasBusy && list.length === 0) void refreshOtaVersions();
+          otaUpdatingRef.current = active;
+          progressRef.current = progress;
+          setOtaUpdating(active);
+          setOtaProgress(progress);
+          setJustTriggered(Object.keys(pendingRef.current));
+          setOtaReconnecting(false);
+          setOtaWorkerUnavailable(workerUnavailable);
+          if (wasBusy && active.length === 0) void refreshOtaVersions();
         }
-      } catch { /* bootstrap down → treat as "nothing running" */ }
-      if (!cancelled) timer = setTimeout(poll, otaUpdatingRef.current.length > 0 ? 2000 : 10000);
+      } catch {
+        // Preserve active state across service restarts and network failures.
+        if (!cancelled) setOtaReconnecting(true);
+      } finally {
+        inFlight = false;
+      }
+      if (!cancelled) timer = setTimeout(poll, otaUpdatingRef.current.length > 0 || Object.keys(pendingRef.current).length > 0 ? 2000 : 10000);
     };
     pokePollRef.current = () => { if (timer) clearTimeout(timer); void poll(); };
     void poll();
@@ -171,19 +223,17 @@ export function OverviewSection({
   }, [refreshOtaVersions]);
 
   const onUpdateTriggered = useCallback((target: string) => {
-    setJustTriggered((prev) => ({ ...prev, [target]: Date.now() }));
+    delete unobservedRef.current[target];
+    pendingRef.current[target] = { at: Date.now(), previousRun: progressRef.current[target]?.run_id, acknowledged: false };
+    setJustTriggered(Object.keys(pendingRef.current));
     pokePollRef.current();
-    setTimeout(() => {
-      setJustTriggered((prev) => {
-        const next = { ...prev };
-        delete next[target];
-        return next;
-      });
-      void refreshOtaVersions();
-    }, 6000);
-  }, [refreshOtaVersions]);
+  }, []);
 
-  const isUpdating = (target: string) => otaUpdating.includes(target) || target in justTriggered;
+  const updateStatus = (target: string) => ({
+    updating: otaUpdating.includes(target) || justTriggered.includes(target),
+    progress: justTriggered.includes(target) || (otaUpdating.includes(target) && otaProgress[target] && isTerminalProgress(otaProgress[target])) ? undefined : otaProgress[target],
+    reconnecting: otaReconnecting || (otaWorkerUnavailable && (!otaProgress[target] || isTerminalProgress(otaProgress[target]) || Date.now() / 1000 - otaProgress[target].updated_at > 15)),
+  });
 
   const [localVolume, setLocalVolume] = useState<number | null>(null);
   const draggingVolume = useRef(false);
@@ -191,7 +241,7 @@ export function OverviewSection({
 
   useEffect(() => {
     if (!draggingVolume.current && audio?.volume != null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- the slider is an uncontrolled-while-dragging input: server volume may only overwrite it BETWEEN drags. Deriving it during render would yank the handle out from under the operator's finger mid-drag.
+      // The slider is an uncontrolled-while-dragging input: server volume may only overwrite it BETWEEN drags. Deriving it during render would yank the handle out from under the operator's finger mid-drag.
       setLocalVolume(audio.volume);
     }
   }, [audio?.volume]);
@@ -223,7 +273,7 @@ export function OverviewSection({
   const monCard = { ...S.card, boxShadow: undefined };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div className="lm-overview" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
       <div className="lm-mon-hero">
         <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -247,8 +297,8 @@ export function OverviewSection({
             <HeroChip
               icon={<Bot size={14} />}
               label="Agent"
-              value={oc?.connected ? "Online" : "Offline"}
-              tone={oc?.connected ? "ok" : "error"}
+              value={oc ? (oc.connected ? "Online" : "Offline") : "Loading"}
+              tone={oc ? (oc.connected ? "ok" : "error") : "neutral"}
             />
             <HeroChip icon={<Wifi size={14} />} label="IP" value={net?.ip ?? "—"} tone="neutral" />
             <HeroChip
@@ -261,11 +311,12 @@ export function OverviewSection({
         </div>
       </div>
 
-      <div className="lm-grid-4 lm-overview-status-grid">
+      <div className="lm-overview-zone-heading"><h2>System health</h2><span>Agent, connectivity and hardware</span></div>
+      <div className="lm-overview-health">
         <div className="lm-mon-card" style={{ ...monCard, position: "relative" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <CardLabel icon={<Satellite size={13} />} text="Agent Gateway" />
-            <StatusBadge text={oc?.connected ? "ONLINE" : "OFFLINE"} ok={!!oc?.connected} pulse={!!oc?.connected} />
+            <StatusBadge text={oc ? (oc.connected ? "ONLINE" : "OFFLINE") : "LOADING"} tone={!oc ? "idle" : undefined} ok={!!oc?.connected} pulse={!!oc?.connected} />
           </div>
           {oc ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -283,7 +334,7 @@ export function OverviewSection({
               {oc.emotion && <StatRow label="Emotion" value={oc.emotion} color="var(--lm-amber)" />}
             </div>
           ) : <SkeletonRows lines={3} />}
-          <RestartAgentButton agentName={oc?.name} />
+          <div className="lm-overview-restart"><span>Restart agent</span>{updateStatus("agent").updating ? <span role="status">Update in progress</span> : <RestartAgentButton agentName={oc?.name} showLabel />}</div>
         </div>
 
         <div className="lm-mon-card" style={monCard}>
@@ -312,7 +363,7 @@ export function OverviewSection({
         <div className="lm-mon-card" style={monCard}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <CardLabel icon={<Eye size={13} />} text="Presence" />
-            <StatusBadge text={(presence?.state ?? "—").toUpperCase()} tone={presence?.state === "active" ? "active" : "idle"} pulse={presence?.state === "active"} />
+            <span className="lm-overview-presence">{presence?.state ?? "Loading"}</span>
           </div>
           {presence ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -322,6 +373,57 @@ export function OverviewSection({
           ) : <SkeletonRows lines={2} />}
         </div>
 
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <CardLabel icon={<Cpu size={13} />} text="Hardware" />
+            {ledColor && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{
+                  width: 14, height: 14, borderRadius: "50%",
+                  background: ledColor.on ? ledColor.hex : "transparent",
+                  boxShadow: ledColor.on ? `0 0 8px ${ledColor.hex}cc` : "none",
+                  border: `2px solid ${ledColor.on ? ledColor.hex : "var(--lm-border)"}`,
+                  flexShrink: 0,
+                }} title={`RGB(${ledColor.color.join(", ")})`} />
+                <span style={{ fontSize: 10, fontFamily: "monospace", color: ledColor.on ? "var(--lm-text)" : "var(--lm-text-muted)" }}>
+                  {ledColor.on ? ledColor.hex : "off"}
+                </span>
+                {ledColor.on && (
+                  <span style={{ fontSize: 10, color: "var(--lm-text-dim)" }}>
+                    {Math.round(ledColor.brightness * 100)}%
+                  </span>
+                )}
+                {ledColor.effect && (
+                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "rgba(167,139,250,0.15)", color: "var(--lm-purple)", fontWeight: 600 }}>
+                    {ledColor.effect}
+                  </span>
+                )}
+                {ledColor.scene && !ledColor.effect && (
+                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 600 }}>
+                    {ledColor.scene}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          {hw ? (
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 7 }}>
+              <HWBadge label="Servo" ok={hw.servo} />
+              <HWBadge label="LED" ok={hw.led} />
+              <HWBadge label="Camera" ok={hw.camera} />
+              <HWBadge label="Audio" ok={hw.audio} />
+              <HWBadge label="Sensing" ok={hw.sensing} />
+              <HWBadge label="Voice" ok={hw.voice} />
+              <HWBadge label="TTS" ok={hw.tts} />
+            </div>
+          ) : <SkeletonRows lines={2} />}
+        </div>
+
+      </div>
+
+      <div className="lm-overview-zone-heading"><h2>Live controls</h2><span>Audio, expression, movement and lighting</span></div>
+      <div className="lm-overview-controls">
+        <div className="lm-overview-control-stack">
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Volume2 size={13} />} text="Audio" /></div>
           {voice ? (
@@ -418,19 +520,44 @@ export function OverviewSection({
             </div>
           ) : <AudioSkeleton />}
         </div>
-      </div>
+        {/* Gated on data: the light capability cannot tell whether /scene exists. */}
+        {sceneInfo && (
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Clapperboard size={13} />} text="Scene" /></div>
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
+              {sceneInfo.scenes.map((s) => (
+                <button type="button" key={s} aria-pressed={s === sceneInfo.active} onClick={() => onSceneActivate(s)} style={{
+                  fontSize: 11,
+                  padding: "3px 9px",
+                  borderRadius: 6,
+                  background: s === sceneInfo.active ? "var(--lm-amber-dim)" : "var(--lm-surface)",
+                  border: `1px solid ${s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-border)"}`,
+                  color: s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-text-dim)",
+                  cursor: "pointer",
+                  fontWeight: s === sceneInfo.active ? 600 : 400,
+                  textTransform: "capitalize",
+                }}>{s}</button>
+              ))}
+              <button type="button" aria-pressed={!sceneInfo.active} onClick={() => onSceneActivate("off")} style={{
+                fontSize: 11,
+                padding: "3px 9px",
+                borderRadius: 6,
+                background: !sceneInfo.active ? "var(--lm-amber-dim)" : "var(--lm-surface)",
+                border: `1px solid ${!sceneInfo.active ? "var(--lm-amber)" : "var(--lm-border)"}`,
+                color: !sceneInfo.active ? "var(--lm-amber)" : "var(--lm-text-dim)",
+                cursor: "pointer",
+                fontWeight: !sceneInfo.active ? 600 : 400,
+              }}>Off</button>
+            </div>
+        </div>
+        )}
 
-      <div className="lm-cluster">
-        <div className="lm-cluster-col" style={{ order: 2 }}>
+        </div>
+        <div className="lm-overview-control-stack">
         {hasEmotion && (
-        <div style={{
-          ...S.card, padding: "14px 16px",
-          background: emotion ? `linear-gradient(135deg, var(--lm-bg) 60%, ${emotionColor}18)` : "var(--lm-bg)",
-          border: `1px solid ${emotion ? emotionColor + "55" : "var(--lm-border)"}`,
-          transition: "all 0.4s ease",
-        }}>
+        <div className="lm-mon-card lm-overview-emotion" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Drama size={13} />} text="Emotion" /></div>
-          <div style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
+          <div className="lm-overview-presets" style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "0 1 205px", minWidth: 180 }}>
               <div style={{
                 fontSize: 36, lineHeight: 1, flexShrink: 0,
@@ -467,7 +594,7 @@ export function OverviewSection({
               <PillCloud
                 items={ALL_EMOTIONS}
                 active={emotion}
-                label={(e) => <>{EMOTION_EMOJI[e]} {e}</>}
+                label={(e) => <><span aria-hidden>{EMOTION_EMOJI[e]}</span><span>{e.replaceAll("_", " ")}</span></>}
                 accent={(e) => EMOTION_COLOR[e] ?? "#fff"}
                 onPick={onEmotionPick}
                 title={(e) => `Test emotion: ${e}`}
@@ -481,10 +608,10 @@ export function OverviewSection({
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Bot size={13} />} text="Servo Pose" /></div>
           {servo ? (
-            <div style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: "0 0 140px", minWidth: 0 }}>
+            <div className="lm-overview-presets" style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
+              <div style={{ display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, flex: "0 0 140px", minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--lm-amber)" }}>
-                  {servo.current || "idle"}
+                  {(servo.current || "idle").replaceAll("_", " ")}
                   {(servo.bus_connected === false || servo.robot_connected === false) && (
                     <span style={{ fontSize: 10, color: "var(--lm-danger, #c44)", marginLeft: 6 }}>
                       (bus {servo.bus_connected === false ? "down" : "ok"}{servo.robot_connected === false ? ", robot off" : ""})
@@ -500,7 +627,7 @@ export function OverviewSection({
                 <PillCloud
                   items={servo.available_recordings ?? []}
                   active={servo.current ?? ""}
-                  label={(p) => p}
+                  label={(p) => p.replaceAll("_", " ")}
                   accent={() => "var(--lm-amber)"}
                   onPick={onServoPlay}
                 />
@@ -510,10 +637,14 @@ export function OverviewSection({
         </div>
         )}
 
+        </div>
+      </div>
+
+      <div className="lm-overview-zone-heading"><h2>Services</h2><span>Versions, uptime and maintenance</span></div>
         <div className="lm-mon-card" style={monCard}>
-          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
+          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Service versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowX: "auto" }}>
-            <div style={{ ...versionRowLayout, fontSize: 10, color: "var(--lm-text-muted)" }}>
+            <div className="lm-version-header" style={{ ...versionRowLayout, fontSize: 10, color: "var(--lm-text-muted)" }}>
               <span>Service</span>
               <span>Current</span>
               <span title="Latest published version in this device's OTA feed">Latest</span>
@@ -522,102 +653,18 @@ export function OverviewSection({
               <span />
             </div>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web" latestVersion={otaVersions["web"]?.target}    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="os-server" name="OS" latestVersion={otaVersions["os-server"]?.target}     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="hal" name="HAL" latestVersion={otaVersions["hal"]?.target}    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
-            <VersionRow name="Agent" latestVersion={otaVersions["agent"]?.target}  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
-            {isDebug && <VersionRow name="Bootstrap" latestVersion={otaVersions["bootstrap"]?.target} color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
-            {isDebug && <VersionRow name="Device" latestVersion={otaVersions["device"]?.target} color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
+            <VersionRow name="Web" latestVersion={otaVersions["web"]?.target}    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} {...updateStatus("web")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="os-server" name="OS" latestVersion={otaVersions["os-server"]?.target}     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} {...updateStatus("os-server")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="hal" name="HAL" latestVersion={otaVersions["hal"]?.target}    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} {...updateStatus("hal")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="Agent" latestVersion={otaVersions["agent"]?.target}  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} {...updateStatus("agent")} onTriggered={onUpdateTriggered} />
+            {isDebug && <VersionRow name="Bootstrap" latestVersion={otaVersions["bootstrap"]?.target} color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} {...updateStatus("bootstrap")} onTriggered={onUpdateTriggered} />}
+            {isDebug && <VersionRow name="Device" latestVersion={otaVersions["device"]?.target} color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} {...updateStatus("device")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
-        </div>
-
-        <div className="lm-cluster-col" style={{ order: 1 }}>
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <CardLabel icon={<Cpu size={13} />} text="Hardware" />
-            {ledColor && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{
-                  width: 14, height: 14, borderRadius: "50%",
-                  background: ledColor.on ? ledColor.hex : "transparent",
-                  boxShadow: ledColor.on ? `0 0 8px ${ledColor.hex}cc` : "none",
-                  border: `2px solid ${ledColor.on ? ledColor.hex : "var(--lm-border)"}`,
-                  flexShrink: 0,
-                }} title={`RGB(${ledColor.color.join(", ")})`} />
-                <span style={{ fontSize: 10, fontFamily: "monospace", color: ledColor.on ? "var(--lm-text)" : "var(--lm-text-muted)" }}>
-                  {ledColor.on ? ledColor.hex : "off"}
-                </span>
-                {ledColor.on && (
-                  <span style={{ fontSize: 10, color: "var(--lm-text-dim)" }}>
-                    {Math.round(ledColor.brightness * 100)}%
-                  </span>
-                )}
-                {ledColor.effect && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "rgba(167,139,250,0.15)", color: "var(--lm-purple)", fontWeight: 600 }}>
-                    {ledColor.effect}
-                  </span>
-                )}
-                {ledColor.scene && !ledColor.effect && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 600 }}>
-                    {ledColor.scene}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          {hw ? (
-            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 7 }}>
-              <HWBadge label="Servo" ok={hw.servo} />
-              <HWBadge label="LED" ok={hw.led} />
-              <HWBadge label="Camera" ok={hw.camera} />
-              <HWBadge label="Audio" ok={hw.audio} />
-              <HWBadge label="Sensing" ok={hw.sensing} />
-              <HWBadge label="Voice" ok={hw.voice} />
-              <HWBadge label="TTS" ok={hw.tts} />
-            </div>
-          ) : <SkeletonRows lines={2} />}
-        </div>
-
-        {/* Gated on data: the light capability cannot tell whether /scene exists. */}
-        {sceneInfo && (
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ marginBottom: 12 }}><CardLabel icon={<Clapperboard size={13} />} text="Scene" /></div>
-            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
-              {sceneInfo.scenes.map((s) => (
-                <span key={s} role="button" onClick={() => onSceneActivate(s)} style={{
-                  fontSize: 11,
-                  padding: "3px 9px",
-                  borderRadius: 6,
-                  background: s === sceneInfo.active ? "var(--lm-amber-dim)" : "var(--lm-surface)",
-                  border: `1px solid ${s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                  color: s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-text-dim)",
-                  cursor: "pointer",
-                  fontWeight: s === sceneInfo.active ? 600 : 400,
-                  textTransform: "capitalize",
-                }}>{s}</span>
-              ))}
-              <span role="button" onClick={() => onSceneActivate("off")} style={{
-                fontSize: 11,
-                padding: "3px 9px",
-                borderRadius: 6,
-                background: !sceneInfo.active ? "var(--lm-red)" : "var(--lm-surface)",
-                border: `1px solid ${!sceneInfo.active ? "var(--lm-red)" : "var(--lm-border)"}`,
-                color: !sceneInfo.active ? "#fff" : "var(--lm-text-dim)",
-                cursor: "pointer",
-                fontWeight: !sceneInfo.active ? 600 : 400,
-              }}>Off</span>
-            </div>
-        </div>
-        )}
-
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Power size={13} />} text="Power" /></div>
           <DevicePowerButtons />
         </div>
-
-        </div>
-      </div>
 
       <div style={{ ...S.card, display: "none" }}>
         <div style={S.cardLabel}>Display Eyes</div>
@@ -663,16 +710,16 @@ function PillCloud<T extends string>({ items, active, label, accent, onPick, tit
         const isActive = item === active;
         const c = accent(item);
         return (
-          <span
+          <button type="button"
             key={item}
-            role="button"
+            aria-pressed={isActive}
             title={title?.(item)}
             onClick={() => onPick(item)}
             style={{
-              fontSize: 10, padding: "2px 8px", borderRadius: 999,
-              background: isActive ? `${c}22` : "var(--lm-surface)",
-              border: `1px solid ${isActive ? c + "88" : "var(--lm-border)"}`,
-              color: isActive ? c : "var(--lm-text-muted)",
+              fontSize: 12, padding: "6px 10px", borderRadius: 7,
+              background: isActive ? `color-mix(in srgb, ${c} 14%, var(--lm-surface))` : "var(--lm-surface)",
+              border: `1px solid ${isActive ? `color-mix(in srgb, ${c} 50%, var(--lm-border))` : "var(--lm-border)"}`,
+              color: "var(--lm-text)",
               fontWeight: isActive ? 700 : 400,
               textTransform: "capitalize",
               transition: "all 0.2s ease",
@@ -681,7 +728,7 @@ function PillCloud<T extends string>({ items, active, label, accent, onPick, tit
             }}
           >
             {label(item)}
-          </span>
+          </button>
         );
       })}
     </div>
@@ -893,13 +940,13 @@ function ToggleButton({ active, label, onClick, disabled = false }: {
 
 const versionRowLayout = {
   display: "grid",
-  gridTemplateColumns: "70px minmax(55px, 1fr) minmax(55px, 1fr) 70px 70px 65px",
+  gridTemplateColumns: "70px minmax(55px, 1fr) minmax(55px, 1fr) 90px 112px 112px",
   minWidth: 425,
   alignItems: "center",
   gap: 8,
 };
 
-function VersionRow({ name, color, version, latestVersion, uptime, updateTarget, updating = false, onTriggered, restartTarget }: {
+function VersionRow({ name, color, version, latestVersion, uptime, updateTarget, updating = false, onTriggered, restartTarget, progress, reconnecting = false }: {
   name: string;
   color: string;
   version: string | null;
@@ -909,24 +956,25 @@ function VersionRow({ name, color, version, latestVersion, uptime, updateTarget,
   restartTarget?: "os-server" | "hal";
   // Show a label during install; without it operators press again, which can break the runtime.
   updating?: boolean;
+  progress?: OtaProgress;
+  reconnecting?: boolean;
   onTriggered?: (target: string) => void;
 }) {
   return (
-    <div style={versionRowLayout}>
+    <div className="lm-version-row" style={versionRowLayout}>
       <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>{name}</span>
-      <span title={version ?? undefined} style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version ?? "—"}</span>
-      <span title={latestVersion || undefined} style={{ fontSize: 12.5, color: "var(--lm-text-dim)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestVersion || "—"}</span>
-      <span style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
+      <span data-label="Current" title={version ?? undefined} style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version ?? "—"}</span>
+      <span data-label="Latest" title={latestVersion || undefined} style={{ fontSize: 12.5, color: "var(--lm-text-dim)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestVersion || "—"}</span>
+      <span data-label="Uptime" style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>
-      <span style={{ display: "flex", justifyContent: "flex-end" }}>
-        {updating
-          ? <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--lm-amber)" }} title="Installing — the component restarts when it finishes">updating…</span>
-          : updateTarget && <SoftwareUpdateButton target={updateTarget} label="update" onTriggered={onTriggered} />}
+      <span className="lm-overview-update" style={{ display: "flex", justifyContent: "flex-end" }}>
+        {!updating && updateTarget && <SoftwareUpdateButton target={updateTarget} label={<><Download size={14} aria-hidden />Update</>} onTriggered={onTriggered} />}
       </span>
       <span style={{ display: "flex", justifyContent: "flex-end" }}>
         {restartTarget && <RestartServiceButton target={restartTarget} disabled={updating} />}
       </span>
+      <UpdateProgress progress={progress} updating={updating} reconnecting={reconnecting} />
     </div>
   );
 }

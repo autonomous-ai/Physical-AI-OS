@@ -19,7 +19,15 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
       AP is still briefly alive (see "AP→STA Auto-Redirect")
    b. Wait for internet (up to 60s wall clock; ICMP to 8.8.8.8, falling back
       to a TLS handshake with the cloud API host for networks that drop ICMP)
-   c. Save config
+   c. Save config, then resync the clock (no RTC: the device boots with a
+      stale time and every TLS call fails "certificate is not yet valid"):
+      chrony `online` + `refresh` (re-resolves NTP pool names that failed in
+      AP mode) + `burst`, or a systemd-timesyncd restart; wait up to 15s for
+      `NTPSynchronized`, else keep syncing in the background
+      (`system/lib/clocksync`). A later backend ping that fails on certificate
+      validity also starts a background resync, at most once a minute. The
+      OrangePi image seeds `/etc/fake-hwclock.data` with its build time, so a
+      fresh device boots no earlier than the image was built
    d. Early backend ping (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publishes the device's fresh LAN IP (local_ip) to the
       backend WITHOUT waiting for the agent setup below, so a page that
@@ -64,6 +72,8 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
 ```
 
 Fields come from `SetupRequest` in `system/domain/device.go`. `device_id`, `llm_api_key` and `llm_base_url` carry `validate:"required"`; everything else is optional. `ssid` may be empty (wired/ethernet path, see below). `channel` is `telegram` (default when empty), `slack`, `discord` or `imessage`; the matching credential fields are `telegram_bot_token`/`telegram_user_id`, `slack_bot_token`/`slack_app_token`/`slack_user_id`, `discord_bot_token`/`discord_guild_id`/`discord_user_id`, or `bluebubbles_server_url`/`bluebubbles_password`/`bluebubbles_user_address`. Optional voice overrides: `stt_api_key`, `tts_api_key`, `stt_base_url`, `tts_base_url`, `stt_language`, `tts_provider`, `tts_voice`.
+
+Japanese uses `stt_language: "ja"`. Setup offers Japanese (日本語), Japanese voice enrollment phrases and six curated ElevenLabs voices; the default is Shizuka. See [Japanese voice catalog](realtime-voice.md#japanese-language-and-elevenlabs-voices).
 
 **Response:** Returns immediately `{"status": 1}`. Setup runs async in a goroutine after 2s delay.
 

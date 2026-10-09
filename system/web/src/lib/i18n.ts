@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 export const LANG = {
   EN: "en",
   VI: "vi",
+  JA: "ja",
   ZH_CN: "zh-CN",
   ZH_TW: "zh-TW",
 } as const;
@@ -14,7 +15,8 @@ const FALLBACK_LANG: Lang = LANG.EN;
 // Normalises an STT language code or alias onto a canonical Lang (unknown -> English).
 export function normalizeLang(code: string | undefined | null): Lang {
   if (!code) return FALLBACK_LANG;
-  const c = code.toLowerCase();
+  const c = code.trim().toLowerCase().replaceAll("_", "-");
+  if (c === "ja" || c.startsWith("ja-")) return LANG.JA;
   if (c === "vi" || c.startsWith("vi-")) return LANG.VI;
   if (c === "zh-tw" || c === "zh-hant" || c.startsWith("zh-hant-") || c === "zh-hk" || c === "zh-mo") return LANG.ZH_TW;
   if (c === "zh" || c === "zh-cn" || c === "zh-hans" || c.startsWith("zh-hans-") || c.startsWith("zh-")) return LANG.ZH_CN;
@@ -48,12 +50,14 @@ type Catalogue = Record<string, Partial<Record<Lang, string>> & { en: string }>;
 const strings: Catalogue = {
   "chat.empty.title": {
     en: "Chat with Assistant",
+    ja: "アシスタントとチャット",
     vi: "Trò chuyện với Assistant",
     "zh-CN": "与助手聊天",
     "zh-TW": "與助手聊天",
   },
   "chat.empty.subtitle": {
     en: "Ask anything, or try one of these",
+    ja: "何でも聞いてみてください。または、次の例をお試しください",
     vi: "Hỏi bất cứ điều gì, hoặc thử một gợi ý",
     "zh-CN": "随便问，或试试以下建议",
     "zh-TW": "隨便問，或試試以下建議",
@@ -61,24 +65,28 @@ const strings: Catalogue = {
 
   "chat.suggest.music": {
     en: "Play a relaxing song",
+    ja: "リラックスできる曲をかけて",
     vi: "Mở một bài nhạc thư giãn",
     "zh-CN": "播放一首轻松的歌",
     "zh-TW": "播放一首輕鬆的歌",
   },
   "chat.suggest.howAreYou": {
     en: "How are you today?",
+    ja: "今日は元気？",
     vi: "Hôm nay bạn thế nào?",
     "zh-CN": "你今天怎么样？",
     "zh-TW": "你今天好嗎？",
   },
   "chat.suggest.warmLight": {
     en: "Set a warm light mood",
+    ja: "暖かい色の照明にして",
     vi: "Chỉnh ánh sáng ấm áp",
     "zh-CN": "调成温暖的灯光",
     "zh-TW": "調成溫暖的燈光",
   },
   "chat.suggest.whatCanYouDo": {
     en: "What can you do?",
+    ja: "どんなことができる？",
     vi: "Bạn làm được gì?",
     "zh-CN": "你能做什么？",
     "zh-TW": "你能做什麼？",
@@ -86,12 +94,14 @@ const strings: Catalogue = {
 
   "chat.status.thinking": {
     en: "Assistant is thinking…",
+    ja: "アシスタントが考えています…",
     vi: "Assistant đang suy nghĩ…",
     "zh-CN": "助手正在思考…",
     "zh-TW": "助手正在思考…",
   },
   "chat.status.online": {
     en: "Assistant · online",
+    ja: "アシスタント · オンライン",
     vi: "Assistant · trực tuyến",
     "zh-CN": "助手 · 在线",
     "zh-TW": "助手 · 在線",
@@ -99,30 +109,35 @@ const strings: Catalogue = {
 
   "chat.time.now": {
     en: "now",
+    ja: "たった今",
     vi: "vừa xong",
     "zh-CN": "刚刚",
     "zh-TW": "剛剛",
   },
   "chat.time.minutes": {
     en: "{n}m",
+    ja: "{n}分前",
     vi: "{n} phút",
     "zh-CN": "{n}分钟前",
     "zh-TW": "{n}分鐘前",
   },
   "chat.time.hours": {
     en: "{n}h",
+    ja: "{n}時間前",
     vi: "{n} giờ",
     "zh-CN": "{n}小时前",
     "zh-TW": "{n}小時前",
   },
   "chat.time.yesterday": {
     en: "yesterday",
+    ja: "昨日",
     vi: "hôm qua",
     "zh-CN": "昨天",
     "zh-TW": "昨天",
   },
   "chat.time.days": {
     en: "{n}d",
+    ja: "{n}日前",
     vi: "{n} ngày",
     "zh-CN": "{n}天前",
     "zh-TW": "{n}天前",

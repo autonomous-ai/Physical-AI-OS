@@ -98,8 +98,6 @@ def activate_scene(req: SceneRequest):
 
     state._active_scene = req.scene
     _persist_scene(req.scene)
-    if state.sensing_service:
-        state.sensing_service.presence.set_last_color(tuple(scaled))
     state._save_user_led_state({"type": LST_SCENE, "scene": req.scene})
 
     aim_dir = preset.get("aim")

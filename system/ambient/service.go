@@ -307,6 +307,12 @@ func (s *Service) microMovementLoop(ctx context.Context) {
 
 // mumbleLoop occasionally speaks a phrase from i18n.PhraseMumble.
 func (s *Service) mumbleLoop(ctx context.Context) {
+	// Temporarily pause ambient mumble audio; retain the loop for re-enabling.
+	const mumblePaused = true
+	if mumblePaused {
+		return
+	}
+
 	for {
 		delay := 5*60 + rand.Intn(10*60) // 5-15 minutes
 		if !sleepCtx(ctx, time.Duration(delay)*time.Second) {

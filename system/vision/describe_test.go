@@ -90,3 +90,66 @@ func TestDescribeDesktopRejectsCancellationAndMissingConfiguration(t *testing.T)
 		t.Fatal("missing credentials accepted")
 	}
 }
+
+func TestLookDisablesThinkingUnlessReadingText(t *testing.T) {
+	seedDesktopTestCatalog(t)
+	requests := make(chan map[string]any, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"A desk."}]}`))
+	}))
+	defer server.Close()
+	cfg := &config.Config{LLMBaseURL: server.URL + "/v1", LLMAPIKey: "test-key"}
+	for _, readText := range []bool{false, true} {
+		if got, err := LookWithRetry(cfg, "jpeg-base64", "What is this?", readText); err != nil || got != "A desk." {
+			t.Fatalf("readText=%v result=%q err=%v", readText, got, err)
+		}
+		body := <-requests
+		thinking, set := body["thinking"].(map[string]any)
+		if readText == set || (set && thinking["type"] != "disabled") {
+			t.Fatalf("readText=%v thinking=%v", readText, body["thinking"])
+		}
+		prompt := body["messages"].([]any)[0].(map[string]any)["content"].([]any)[1].(map[string]any)["text"].(string)
+		if !strings.Contains(prompt, "What is this?") || strings.Contains(prompt, "readable text") {
+			t.Fatalf("invalid look prompt: %s", prompt)
+		}
+	}
+}
+
+func TestLookFailsFastOnASlowVisionModel(t *testing.T) {
+	seedDesktopTestCatalog(t)
+	prevPlain, prevRead := lookAttemptTimeouts, lookReadAttemptTimeouts
+	lookAttemptTimeouts = []time.Duration{50 * time.Millisecond}
+	lookReadAttemptTimeouts = []time.Duration{50 * time.Millisecond}
+	t.Cleanup(func() { lookAttemptTimeouts, lookReadAttemptTimeouts = prevPlain, prevRead })
+	calls := make(chan struct{}, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer server.Close()
+	cfg := &config.Config{LLMBaseURL: server.URL + "/v1", LLMAPIKey: "test-key"}
+	for readText, attempts := range map[bool]int{false: 1, true: 1} {
+		start := time.Now()
+		if _, err := LookWithRetry(cfg, "jpeg-base64", "What is this?", readText); err == nil {
+			t.Fatalf("readText=%v: slow model must fail", readText)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("readText=%v: waited %s", readText, elapsed)
+		}
+		if got := len(calls); got != attempts {
+			t.Fatalf("readText=%v: %d attempts, want %d", readText, got, attempts)
+		}
+		for len(calls) > 0 {
+			<-calls
+		}
+	}
+}

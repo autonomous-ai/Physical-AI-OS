@@ -113,14 +113,15 @@ func TestDeliveryFailureIsCounted(t *testing.T) {
 	m := newMock(errors.New("network down"), 2)
 	withPipe(t, m)
 
-	Report(Event{Name: "voice_metrics_interaction", ID: "f1"})
-	m.wait(t, 1)
+	// The mock's notification precedes the worker's counter update. Exercise
+	// delivery synchronously so the assertions wait for all delivery bookkeeping;
+	// the other Report tests cover asynchronous queueing and transport calls.
+	global.send(context.Background(), Event{Name: "voice_metrics_interaction", ID: "f1"})
 	if _, failed, _ := Stats(); failed != 1 {
 		t.Fatalf("failed = %d, want 1", failed)
 	}
 
-	Report(Event{Name: "voice_metrics_interaction", ID: "f2"})
-	m.wait(t, 1)
+	global.send(context.Background(), Event{Name: "voice_metrics_interaction", ID: "f2"})
 	if got := m.events[1].params["telemetry_failed_total"]; got != int64(1) {
 		t.Errorf("telemetry_failed_total = %v, want 1", got)
 	}

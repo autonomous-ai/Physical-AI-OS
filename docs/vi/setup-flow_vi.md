@@ -19,7 +19,15 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
       trong giây lát (xem "Tự Động Chuyển Hướng AP→STA")
    b. Chờ internet (tối đa 60s tính theo đồng hồ; ICMP tới 8.8.8.8, nếu không
       được thì bắt tay TLS với host cloud API — cho mạng chặn ICMP)
-   c. Lưu config
+   c. Lưu config, rồi đồng bộ lại đồng hồ (không có RTC: thiết bị khởi động
+      với giờ cũ và mọi lệnh TLS lỗi "certificate is not yet valid"): chrony
+      `online` + `refresh` (resolve lại tên NTP pool bị lỗi lúc ở AP mode) +
+      `burst`, hoặc restart systemd-timesyncd; chờ tối đa 15s tới khi
+      `NTPSynchronized`, nếu chưa thì tiếp tục đồng bộ ở background
+      (`system/lib/clocksync`). Ping backend về sau mà lỗi hiệu lực certificate
+      cũng khởi động đồng bộ lại ở background, tối đa mỗi phút một lần. Ảnh
+      OrangePi ghi giờ lúc build vào `/etc/fake-hwclock.data`, nên thiết bị mới
+      không bao giờ khởi động với giờ sớm hơn lúc build ảnh
    d. Ping backend sớm (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publish IP LAN mới (local_ip) lên backend mà KHÔNG chờ
       bước setup agent bên dưới, để trang đã mở popup Setup có thể tra IP và
@@ -64,6 +72,8 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
 ```
 
 Các field lấy từ `SetupRequest` trong `system/domain/device.go`. `device_id`, `llm_api_key` và `llm_base_url` có tag `validate:"required"`; mọi field khác là tuỳ chọn. `ssid` có thể để trống (đường wired/ethernet, xem bên dưới). `channel` là `telegram` (mặc định khi để trống), `slack`, `discord` hoặc `imessage`; các field credential tương ứng là `telegram_bot_token`/`telegram_user_id`, `slack_bot_token`/`slack_app_token`/`slack_user_id`, `discord_bot_token`/`discord_guild_id`/`discord_user_id`, hoặc `bluebubbles_server_url`/`bluebubbles_password`/`bluebubbles_user_address`. Override voice tuỳ chọn: `stt_api_key`, `tts_api_key`, `stt_base_url`, `tts_base_url`, `stt_language`, `tts_provider`, `tts_voice`.
+
+Tiếng Nhật dùng `stt_language: "ja"`. Setup có Japanese (日本語), các câu đăng ký giọng tiếng Nhật và sáu voice ElevenLabs chọn lọc; mặc định là Shizuka. Xem [danh mục giọng Nhật](realtime-voice_vi.md#tiếng-nhật-và-giọng-elevenlabs).
 
 **Response:** Trả về ngay `{"status": 1}`. Setup chạy async trong goroutine sau 2s delay.
 

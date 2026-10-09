@@ -22,6 +22,7 @@ from hal.models import (
     StatusResponse,
     TTSConfigRequest,
     VoiceConfigRequest,
+    VoiceInputModeRequest,
     VoiceStartRequest,
     VoiceStatusResponse,
 )
@@ -82,32 +83,34 @@ def start_voice(req: VoiceStartRequest):
         or (state.tts_service and getattr(state.tts_service, "_provider", None) != req.tts_provider)
     )
     if need_tts:
-        if state.tts_service and state.tts_service.speaking:
-            state.tts_service.stop()
-        # Release the old OutputStream first, or the new service's rate probe fails (device busy).
-        if state.tts_service and hasattr(state.tts_service, "release_stream"):
-            try:
-                state.tts_service.release_stream()
-            except Exception:
-                pass
         try:
-            state.tts_service = TTSService(
-                api_key=tts_api_key,
-                base_url=tts_base_url,
-                sound_device_module=sd,
-                numpy_module=np,
-                output_device=state.audio_output_device,
-                voice=voice,
-                speed=get_tts_speed(),
-                instructions=instructions,
-                on_speak_start=state._on_tts_speak_start,
-                on_speak_end=state._on_tts_speak_end,
-                provider=req.tts_provider,
-                # Same tracking hooks as the boot-time instance, or metrics go blind after a swap.
-                on_playback_audio=tts_hooks.on_playback_audio,
-                on_playback_done=tts_hooks.on_playback_done,
-                on_playback_muted=tts_hooks.on_playback_muted,
-            )
+            def create_tts():
+                previous = state.tts_service
+                if previous is not None:
+                    # A provider replacement also invalidates deferred old-voice
+                    # replies, even when no audio is currently playing.
+                    previous.stop()
+                    if hasattr(previous, "release_stream"):
+                        previous.release_stream()
+                return TTSService(
+                    api_key=tts_api_key,
+                    base_url=tts_base_url,
+                    sound_device_module=sd,
+                    numpy_module=np,
+                    output_device=state.audio_output_device,
+                    voice=voice,
+                    speed=get_tts_speed(),
+                    instructions=instructions,
+                    on_speak_start=state._on_tts_speak_start,
+                    on_speak_end=state._on_tts_speak_end,
+                    provider=req.tts_provider,
+                    # Same tracking hooks as the boot-time instance, or metrics go blind after a swap.
+                    on_playback_audio=tts_hooks.on_playback_audio,
+                    on_playback_done=tts_hooks.on_playback_done,
+                    on_playback_muted=tts_hooks.on_playback_muted,
+                )
+            replace = getattr(state.voice_service, "replace_tts_service", None)
+            state.tts_service = replace(create_tts) if replace else create_tts()
             state.logger.info("TTSService started (provider=%s, voice=%s)", req.tts_provider, voice)
             if state.music_service:
                 state.music_service._tts_service = state.tts_service
@@ -180,6 +183,19 @@ def update_voice_config(req: VoiceConfigRequest):
     if not state.voice_service:
         return {"status": "ok"}
     state.voice_service.set_wake_words(req.wake_words)
+    return {"status": "ok"}
+
+
+@router.post("/voice/input-mode", response_model=StatusResponse)
+def update_voice_input_mode(req: VoiceInputModeRequest):
+    """Quiesce capture and apply input policy without restarting HAL."""
+    from hal.drivers.voice._internal.input_mode import set_input_mode
+
+    try:
+        set_input_mode(req.mode, req.wakeword)
+    except Exception as error:
+        state.logger.exception("Voice input mode transition failed")
+        raise HTTPException(503, f"Failed to apply voice input mode: {error}") from error
     return {"status": "ok"}
 
 
@@ -433,7 +449,9 @@ def speak_queue_text(req: SpeakRequest):
 
 @router.post("/tts/stop", response_model=StatusResponse)
 def stop_tts():
-    """Interrupt active TTS playback immediately."""
+    """Interrupt playback and release a turn-based realtime reply wait."""
+    if state.voice_service:
+        state.voice_service.cancel_automatic_reply()
     if state.tts_service:
         state.tts_service.stop()
     return {"status": "ok"}

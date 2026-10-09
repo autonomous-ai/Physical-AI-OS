@@ -341,7 +341,7 @@ the honest outcome, and it beats being absorbed into somebody else's.
 
 A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
 
-The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted.
+The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted. It measures face-ID boxes, not gaze's face picker, so the picker's 15% floor (`HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`, #567) does not apply to it.
 
 Each face-ID tick with an ungreeted stranger in frame logs one line, with the numbers behind each stranger's vote and their running count:
 
@@ -473,3 +473,11 @@ tail -f /var/log/hal/server.log
 ```
 
 No reboot needed — just restart the service.
+
+### Post-capture voice noise guard (lamp-52e6 trial)
+
+The measured trial uses `HAL_SILERO_THRESHOLD=0.15`, `HAL_REALTIME_NOISE_SPEECH_RATIO=0.45`, and `HAL_VOICE_NOISE_MIN_VOICED_MS=160` in `/opt/hal/.env`, followed by a HAL restart. The duration condition requires code supporting the new key; lowering the ratio alone does not reject isolated high-ratio noise spikes. These values are stored in `robots/lamp/rootfs/opt/hal/.env` as the lamp profile defaults. The shared code defaults remain ratio `0.55` and minimum duration `0`; microphone variants still need their own acoustic validation.
+
+On 2026-10-08, 12 captures through the device's existing post-AEC pipeline covered background (6), servo (3), and speaker echo (3). Two previously recorded human utterances plus 14 derived gain/padding variants were replayed on-device. The old ratio-only guard accepted 7/12 noise samples and 15/16 speech samples; the trial accepted 0/12 and 16/16 respectively. These are guard decisions, not end-to-end false dispatch rates. The variants are not independent human recordings, and tuning and evaluation used the same small corpus; broader speech, physical tap, and sleep/wake validation remain necessary.
+
+The guard also applies in automatic mode and before OS fallback when realtime is off/unavailable. Only empty/short transcripts selected by the existing policy are checked; other transcript filters remain unchanged. Logs expose `voiced_ms`, `min_ratio`, `min_voiced_ms`, and `accepted`. The duration is cumulative voiced audio, not a required delay: the extra decision is arithmetic on the existing Silero result.

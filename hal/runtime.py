@@ -49,7 +49,7 @@ from hal.config import (
     OS_CONFIG_PATH,
 )
 from hal.models import HealthResponse, StatusResponse
-from hal.presets import SERVO_CMD_PLAY
+from hal.presets import SERVO_CMD_PLAY, normalize_language
 from hal.drivers.motors.overload import OverloadGuard
 from hal.server_support.openapi_meta import API_DESCRIPTION, OPENAPI_TAGS
 
@@ -560,7 +560,7 @@ async def lifespan(app: FastAPI):
                 stt_provider = DeepgramSTT(api_key=dgk, keywords=stt_keywords)
             elif stt_key and stt_url and AutonomousSTT:
                 stt_model = (os_cfg.get("stt_model") or "").strip() or None
-                stt_language = (os_cfg.get("stt_language") or "").strip() or None
+                stt_language = normalize_language(os_cfg.get("stt_language")) or None
                 stt_kwargs = {}
                 if stt_model:
                     stt_kwargs["model"] = stt_model

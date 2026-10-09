@@ -35,6 +35,11 @@ c=$(curl -s http://127.0.0.1:5001/camera); case "$c" in
 esac
 ```
 
+Add `"read_text":true` to the JSON only when the user asks you to read text,
+a label, a sign, a screen, or a brand/model name (e.g. "what does it say",
+"what brand is this phone"). It takes a sharper photo and lets the vision model
+think, so it is about 3x slower; leave it out for everything else.
+
 Read the output:
 
 - `CAMERA_OFF` → the user turned the camera off (privacy). Say so in one
@@ -190,7 +195,7 @@ A camera that is off (privacy) or has no frame (hardware) is a complete answer b
 
 ## Error Handling
 - If capture fails, report the returned error without describing an unseen frame. `/api/vision/look` reports capture/description failures as errors; a raw `/camera/snapshot` request can return 503 when the camera is unavailable.
-- **One failed `/api/vision/look` is final for this turn.** Do NOT "try once more" and do NOT fall back to `GET /camera/snapshot` — it is the same capture path and fails the same way, costing another tool round. An error mentioning "not delivering frames" / "not connected or not detected" means the camera hardware is absent: tell the user the camera is not connected, and stop.
+- **One failed `/api/vision/look` is final for this turn.** Do NOT "try once more" and do NOT fall back to `GET /camera/snapshot` — it is the same capture path and fails the same way, costing another tool round. A `describe failed` error means the vision model was too slow or unavailable: do NOT take your own snapshot and pass it to `vision_analyze` or any other image tool — they call the same vision model and only add another wait (measured: 53 s more before the reply). Tell the user you couldn't see it this time and stop. An error mentioning "not delivering frames" / "not connected or not detected" means the camera hardware is absent: tell the user the camera is not connected, and stop.
 - If the API is unreachable, inform the user that the camera is temporarily unavailable.
 - **Never spend a separate tool round on `GET /camera`** — the Capture Protocol command checks it in the same shell call as the look. Skip the call entirely when a current image/description was already supplied.
 - If a sensing event already included an image, do not call the camera API again.

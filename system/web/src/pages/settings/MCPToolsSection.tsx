@@ -4,6 +4,8 @@ import { C, SectionCard, LABEL_STYLE, INPUT_STYLE } from "@/components/setup/sha
 import { listMCPTools, addMCPTool, removeMCPTool } from "@/lib/api";
 import type { MCPTool } from "@/lib/api";
 
+import "./settings-lists.css";
+
 type HeaderRow = { key: string; value: string };
 
 export function MCPToolsSection({ active }: { active: boolean }) {
@@ -80,7 +82,7 @@ export function MCPToolsSection({ active }: { active: boolean }) {
   };
 
   const SMALL_BTN: React.CSSProperties = {
-    padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 500,
+    padding: "3px 8px", borderRadius: 6, fontSize: 12, fontWeight: 500,
     cursor: "pointer", border: `1px solid ${C.border}`, background: C.surface,
     color: C.textDim,
   };
@@ -94,7 +96,7 @@ export function MCPToolsSection({ active }: { active: boolean }) {
       </div>
 
       {loading ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Loading…</div>
+        <div style={{ fontSize: 12, color: C.textDim }}>Loading…</div>
       ) : (
         <>
           {tools.length > 0 && (
@@ -102,30 +104,32 @@ export function MCPToolsSection({ active }: { active: boolean }) {
               {tools.map((t) => (
                 <div
                   key={t.name}
+                  className="lm-settings-list-row"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     gap: 8, padding: "10px 12px", marginBottom: 6,
                     background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
                   }}
                 >
-                  <div style={{ overflow: "hidden", minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
-                      {t.name}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+                      <span className="lm-settings-list-name">{t.name}</span>
                       {headerCount(t) > 0 && (
-                        <span style={{ fontSize: 10, color: C.amber, fontWeight: 400 }}>
+                        <span style={{ fontSize: 12, color: C.amber, fontWeight: 400 }}>
                           {headerCount(t)} header{headerCount(t) > 1 ? "s" : ""}
                         </span>
                       )}
                     </div>
                     <div style={{
-                      fontSize: 11, color: C.textMuted,
-                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      fontSize: 12, color: C.textDim,
+                      overflowWrap: "anywhere",
                     }}>
                       {t.url}
                     </div>
                   </div>
                   <button
                     type="button"
+                    aria-label={`Remove MCP tool ${t.name}`}
                     onClick={() => handleRemove(t.name)}
                     disabled={removing === t.name}
                     style={{ ...BTN, color: "#ef4444", flexShrink: 0, opacity: removing === t.name ? 0.5 : 1, cursor: removing === t.name ? "not-allowed" : "pointer" }}
@@ -138,7 +142,7 @@ export function MCPToolsSection({ active }: { active: boolean }) {
           )}
 
           {tools.length === 0 && (
-            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14 }}>
               No MCP tools configured yet.
             </div>
           )}
@@ -168,26 +172,39 @@ export function MCPToolsSection({ active }: { active: boolean }) {
 
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <span style={LABEL_STYLE}>Headers <span style={{ color: C.textMuted, fontWeight: 400 }}>(optional)</span></span>
+              <span style={LABEL_STYLE}>Headers <span style={{ color: C.textDim, fontWeight: 400 }}>(optional)</span></span>
               <button type="button" onClick={addHeaderRow} style={SMALL_BTN}>+ Add</button>
             </div>
             {headers.map((h, i) => (
-              <div key={i} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                <input
-                  type="text"
-                  value={h.key}
-                  onChange={(e) => updateHeader(i, "key", e.target.value)}
-                  placeholder="Authorization"
-                  style={{ ...INPUT_STYLE, flex: 1 }}
-                />
-                <input
-                  type="password"
-                  value={h.value}
-                  onChange={(e) => updateHeader(i, "value", e.target.value)}
-                  placeholder="Bearer sk-..."
-                  style={{ ...INPUT_STYLE, flex: 2 }}
-                />
-                <button type="button" onClick={() => removeHeaderRow(i)} style={{ ...SMALL_BTN, color: "#ef4444" }}>×</button>
+              <div key={i} className="lm-mcp-header-row">
+                <div>
+                  <label htmlFor={`mcp-header-key-${i}`} style={LABEL_STYLE}>Header name</label>
+                  <input
+                    id={`mcp-header-key-${i}`}
+                    type="text"
+                    value={h.key}
+                    onChange={(e) => updateHeader(i, "key", e.target.value)}
+                    placeholder="Authorization"
+                    style={INPUT_STYLE}
+                  />
+                </div>
+                <div>
+                  <label htmlFor={`mcp-header-value-${i}`} style={LABEL_STYLE}>Header value</label>
+                  <input
+                    id={`mcp-header-value-${i}`}
+                    type="password"
+                    value={h.value}
+                    onChange={(e) => updateHeader(i, "value", e.target.value)}
+                    placeholder="Bearer sk-..."
+                    style={INPUT_STYLE}
+                  />
+                </div>
+                <button
+                  type="button"
+                  aria-label={`Remove header ${i + 1}`}
+                  onClick={() => removeHeaderRow(i)}
+                  style={{ ...BTN, color: "#ef4444" }}
+                >Remove</button>
               </div>
             ))}
           </div>

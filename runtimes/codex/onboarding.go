@@ -107,7 +107,7 @@ Follow the instructions in whichever file you read.
 **People sync (same pass, right after the above):** ` + "`KNOWLEDGE.md`" + ` is yours alone — the OS never loads it. ` + "`USER.md`" + ` IS loaded, into your system prompt, on every single turn. So anything you learned about a PERSON has to reach ` + "`USER.md`" + ` or you will not have it tomorrow. Carry it across:
 
 - Write ONE bullet per person under a ` + "`## Users`" + ` heading in ` + "`USER.md`" + `, shaped ` + "`- **<label> (friend)** — call: …; notes: …`" + ` — where ` + "`<label>`" + ` is their ENROLLMENT LABEL exactly as it appears in ` + "`[context: current_user=…]`" + `, lowercase. The ` + "`(friend)`" + ` part is required; without it the OS cannot tell your entry from a form field. After the dash write short ` + "`key: value`" + ` segments separated by ` + "`;`" + ` — NOT flowing prose. Only segments that change how you help them.
-- ` + "`call:`" + ` comes FIRST and only when they have TOLD you what to be called. Never guess it, and never guess pronouns or a timezone either — you see a face label and a voiceprint, which say nothing about any of that. If they have not said, omit the segment entirely and just use their label.
+- ` + "`call:`" + ` comes FIRST and only when they have TOLD you what to be called. Never guess it, and never guess pronouns or a timezone either — you see a face label and a voiceprint, which say nothing about any of that. A title or honorific heard in a voice turn (Mr, Ms, Miss, Mrs, anh, chị…) is not them telling you what to be called — speech recognition often invents one ("…is Lee" heard as "Miss Lee"): write the bare name, and never infer gender from a title, a name, a face or a voice. Keep a title only when they explicitly ask for it ("call me Ms Lee"). If they have not said, omit the segment entirely and just use their label.
 - **Only write what you observed about THAT person.** Never move one person's habits, tastes, moods or routines onto another, and never carry a former user's traits over to whoever is here now. Two people at one desk are two entries, never a merged one. If you cannot tell whose a behaviour was, leave it out.
 - **Never delete a PERSON's entry.** Someone not seen today is simply not touched: absence is not departure, and a person away for a month keeps their entry. Retiring a person is the OS's job (it removes an entry once their face/voice enrollment is gone), not yours. This protects people — it does NOT protect a line that should never have been in ` + "`## Users`" + ` in the first place: if you find one, delete it.
 - **Keep each entry under ~400 characters.** Segments are dense, so that is plenty. This file is loaded into your prompt on EVERY turn, so bloat is billed on all of them; and when it overflows the cap it is cut from the END, which is where ` + "`## Users`" + ` lives. Rewrite an entry to stay short rather than appending to it.
@@ -142,6 +142,9 @@ func (s *CodexService) EnsureOnboarding() error {
 	// Best-effort: a presync failure must not block gateway startup.
 	configBefore := fileHash(codexConfigTOML) + fileHash(codexEnvFile)
 	if err := s.runPresync(); err != nil {
+		if s.config.LLMMode() != "" {
+			return fmt.Errorf("apply LLM configuration: %w", err)
+		}
 		slog.Warn("codex presync failed, continuing with workspace reconcile", "component", "codex", "error", err)
 	}
 	presyncChanged := fileHash(codexConfigTOML)+fileHash(codexEnvFile) != configBefore

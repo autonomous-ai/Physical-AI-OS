@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field, model_validator
 
 import hal.config as app_config
+from hal.presets import normalize_language
 from hal.realtime.enums import (
     GeminiThinkingLevel,
     GeminiVoice,
@@ -18,7 +19,7 @@ def _load_language() -> str | None:
     """Load language from the device's config.json (stt_language field)."""
     from hal.config import _os_cfg_get
 
-    lang: str = _os_cfg_get("stt_language", "").strip()
+    lang: str = normalize_language(_os_cfg_get("stt_language", ""))
     return lang if lang else None
 
 
@@ -53,8 +54,8 @@ class OpenAIConfig(BaseModel):
     instructions: str = ""
     sample_rate: int = app_config.REALTIME_OPENAI_SAMPLE_RATE
     language: str | None = _load_language()
-    turn_detection_type: OpenAITurnDetectionType | None = _parse_turn_detection(
-        app_config.REALTIME_TURN_DETECTION
+    turn_detection_type: OpenAITurnDetectionType | None = Field(
+        default_factory=lambda: _parse_turn_detection(app_config.REALTIME_TURN_DETECTION)
     )
     reasoning_effort: OpenAIReasoningEffort = OpenAIReasoningEffort(
         app_config.REALTIME_OPENAI_REASONING_EFFORT
@@ -174,11 +175,9 @@ class GeminiConfig(BaseModel):
             raise ValueError("Gemini context target must be positive and below the trigger; use trigger=0 to disable")
         return self
 
-    vad_enabled: bool = app_config.REALTIME_TURN_DETECTION.strip().lower() not in (
-        "off",
-        "none",
-        "",
-    )
+    vad_enabled: bool = Field(default_factory=lambda: (
+        app_config.REALTIME_TURN_DETECTION.strip().lower() not in ("off", "none", "")
+    ))
 
     vad_start_sensitivity: str = app_config.LIVE_VAD_START_SENSITIVITY
     vad_end_sensitivity: str = app_config.LIVE_VAD_END_SENSITIVITY

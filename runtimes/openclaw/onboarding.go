@@ -60,21 +60,33 @@ Follow the instructions in whichever file you read.
 
 ---`
 
+	// bootstrapMaxChars caps each workspace file (SOUL.md, AGENTS.md, …) in the
+	// prompt. OpenClaw keeps the first 75% and last 25% of a longer file and
+	// silently drops the middle, so a device SOUL must stay well under it.
+	// 24k fits the 18.6k lamp soul with room for OS markers and owner edits.
+	bootstrapMaxChars = 24000
+	// bootstrapTotalMaxChars caps all workspace files together. The lamp soul
+	// plus managed AGENTS/HEARTBEAT blocks total about 28k; 48k leaves about
+	// 20k for other bootstrap files and owner content, not a latency guarantee.
+	bootstrapTotalMaxChars = 48000
+
 	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the gateway's periodic heartbeat poll (~every 30 min while the device is on).
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->
-**Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip silently. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
+**Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip this step. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
 
 **Keep ` + "`KNOWLEDGE.md`" + ` from growing without bound (same pass).** A dated ` + "`## YYYY-MM-DD`" + ` block is raw material, not the archive — the distilled sections at the top are. Keep at most the **14 most recent** dated blocks. For anything older: fold what is still true into the matching top section (Hardware / Users / Skills & APIs / Mistakes Made), then DELETE the dated block. Nothing of value is lost — it was already distilled, and the raw day survives in ` + "`memory/YYYY-MM-DD.md`" + `. Without this the file grows by a section every active day and eventually costs more to read than it is worth.
 
 **People sync (same pass, right after the above):** ` + "`KNOWLEDGE.md`" + ` is yours alone — the OS never loads it. ` + "`USER.md`" + ` IS loaded, into your system prompt, on every single turn. So anything you learned about a PERSON has to reach ` + "`USER.md`" + ` or you will not have it tomorrow. Carry it across:
 
 - Write ONE bullet per person under a ` + "`## Users`" + ` heading in ` + "`USER.md`" + `, shaped ` + "`- **<label> (friend)** — call: …; notes: …`" + ` — where ` + "`<label>`" + ` is their ENROLLMENT LABEL exactly as it appears in ` + "`[context: current_user=…]`" + `, lowercase. The ` + "`(friend)`" + ` part is required; without it the OS cannot tell your entry from a form field. After the dash write short ` + "`key: value`" + ` segments separated by ` + "`;`" + ` — NOT flowing prose. Only segments that change how you help them.
-- ` + "`call:`" + ` comes FIRST and only when they have TOLD you what to be called. Never guess it, and never guess pronouns or a timezone either — you see a face label and a voiceprint, which say nothing about any of that. If they have not said, omit the segment entirely and just use their label.
+- ` + "`call:`" + ` comes FIRST and only when they have TOLD you what to be called. Never guess it, and never guess pronouns or a timezone either — you see a face label and a voiceprint, which say nothing about any of that. A title or honorific heard in a voice turn (Mr, Ms, Miss, Mrs, anh, chị…) is not them telling you what to be called — speech recognition often invents one ("…is Lee" heard as "Miss Lee"): write the bare name, and never infer gender from a title, a name, a face or a voice. Keep a title only when they explicitly ask for it ("call me Ms Lee"). If they have not said, omit the segment entirely and just use their label.
 - **Only write what you observed about THAT person.** Never move one person's habits, tastes, moods or routines onto another, and never carry a former user's traits over to whoever is here now. Two people at one desk are two entries, never a merged one. If you cannot tell whose a behaviour was, leave it out.
 - **Never delete a PERSON's entry.** Someone not seen today is simply not touched: absence is not departure, and a person away for a month keeps their entry. Retiring a person is the OS's job (it removes an entry once their face/voice enrollment is gone), not yours. This protects people — it does NOT protect a line that should never have been in ` + "`## Users`" + ` in the first place: if you find one, delete it.
 - **Keep each entry under ~400 characters.** Segments are dense, so that is plenty. This file is loaded into your prompt on EVERY turn, so bloat is billed on all of them; and when it overflows the cap it is cut from the END, which is where ` + "`## Users`" + ` lives. Rewrite an entry to stay short rather than appending to it.
 - **Strangers get NO entry — and remove any you find.** ` + "`## Users`" + ` is for people the device knows by enrollment. A passing face has no label to key on and nothing durable to remember; note desk traffic in ` + "`KNOWLEDGE.md`" + ` instead. An entry like ` + "`**stranger_4**`" + ` or a lumped ` + "`**stranger_2/3/4/…**`" + ` is not a person: delete it. The OS cannot clean these up for you — its pruner only recognises a proper ` + "`**<label> (role)**`" + ` entry.
 - Do NOT fill ` + "`**Name:**`" + ` or the other single-value fields at the top. This device can have several people; who is present right now always comes from ` + "`[context: current_user=…]`" + ` on the turn, never from that field.
+
+**Ending the heartbeat:** this pass is housekeeping, not a conversation. When it is done — including when there was nothing to do — reply with exactly ` + "`NO_REPLY`" + ` and nothing else. Never end with an empty reply: OpenClaw treats an empty heartbeat as a failure and posts "Agent couldn't generate a response" to the owner's chat.
 
 ---`
 )
@@ -242,7 +254,8 @@ func (s *OpenclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Pin messages.queue.mode=steer so concurrent producers batch into the active turn.
+	// Pin messages.queue.mode=steer so concurrent producers batch into the active turn,
+	// and drop the "auto" reply prefix.
 	if queueAdded, err := s.ensureMessagesQueueConfig(); err != nil {
 		slog.Error("ensure messages.queue config failed", "component", "onboarding", "error", err)
 	} else if queueAdded {
@@ -660,7 +673,8 @@ func (s *OpenclawService) ensureControlUIConfig() (bool, error) {
 	return true, nil
 }
 
-// ensureMessagesQueueConfig pins messages.queue.mode to "steer".
+// ensureMessagesQueueConfig pins messages.queue.mode to "steer" and drops the
+// "auto" reply prefix older setups wrote (it prints "[main]" before replies).
 func (s *OpenclawService) ensureMessagesQueueConfig() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
@@ -682,10 +696,14 @@ func (s *OpenclawService) ensureMessagesQueueConfig() (bool, error) {
 		queue = map[string]interface{}{}
 		messages["queue"] = queue
 	}
-	if v, _ := queue["mode"].(string); v == "steer" {
+	changed := dropAutoResponsePrefix(configData)
+	if v, _ := queue["mode"].(string); v != "steer" {
+		queue["mode"] = "steer"
+		changed = true
+	}
+	if !changed {
 		return false, nil
 	}
-	queue["mode"] = "steer"
 
 	outBytes, err := json.MarshalIndent(configData, "", "  ")
 	if err != nil {
@@ -694,8 +712,39 @@ func (s *OpenclawService) ensureMessagesQueueConfig() (bool, error) {
 	if err := os.WriteFile(configPath, outBytes, 0600); err != nil {
 		return false, fmt.Errorf("write openclaw.json: %w", err)
 	}
-	slog.Info("pinned messages.queue.mode=steer in openclaw.json", "component", "onboarding")
+	slog.Info("updated messages config in openclaw.json", "component", "onboarding")
 	return true, nil
+}
+
+// dropAutoResponsePrefix removes responsePrefix "auto" from messages and from
+// every channel and channel account (OpenClaw doctor copies the global value
+// down). Custom prefixes are left alone. Reports whether anything changed.
+func dropAutoResponsePrefix(configData map[string]interface{}) bool {
+	changed := false
+	drop := func(m map[string]interface{}) {
+		if v, _ := m["responsePrefix"].(string); v == "auto" {
+			delete(m, "responsePrefix")
+			changed = true
+		}
+	}
+	if messages, ok := configData["messages"].(map[string]interface{}); ok {
+		drop(messages)
+	}
+	channels, _ := configData["channels"].(map[string]interface{})
+	for _, ch := range channels {
+		chMap, ok := ch.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		drop(chMap)
+		accounts, _ := chMap["accounts"].(map[string]interface{})
+		for _, acc := range accounts {
+			if accMap, ok := acc.(map[string]interface{}); ok {
+				drop(accMap)
+			}
+		}
+	}
+	return changed
 }
 
 // downloadFile fetches url and writes it to dst.
@@ -806,7 +855,7 @@ func (s *OpenclawService) ensureGatewayToken() (bool, error) {
 
 // ensureProviderConfig syncs models.providers.autonomous.{apiKey,baseUrl} in openclaw.json with the current config.json values.
 func (s *OpenclawService) ensureProviderConfig() (bool, error) {
-	if s.config.LLMAPIKey == "" {
+	if s.config.LLMRuntimeManaged() || s.config.LLMAPIKey == "" {
 		return false, nil
 	}
 
@@ -866,6 +915,30 @@ func (s *OpenclawService) ensureProviderConfig() (bool, error) {
 }
 
 // ensureAgentDefaults patches agents.defaults in openclaw.json with performance config.
+// pinSilentHeartbeat turns the recurring heartbeat off and keeps any
+// event-driven wake silent. On OpenClaw 2026.9 an empty heartbeat reply is
+// retried as a "visible-answer continuation"; the model then read the main chat
+// via sessions_history and messaged the owner on Telegram with the `message`
+// tool every 30 min, which neither target "none" nor an isolated session stops.
+// Reports whether anything changed.
+func pinSilentHeartbeat(defaultsMap map[string]any) bool {
+	changed := false
+	heartbeatMap := ensureMap(defaultsMap, "heartbeat")
+	if v, _ := heartbeatMap["every"].(string); v != "0m" {
+		heartbeatMap["every"] = "0m"
+		changed = true
+	}
+	if v, _ := heartbeatMap["target"].(string); v != "none" {
+		heartbeatMap["target"] = "none"
+		changed = true
+	}
+	if v, _ := heartbeatMap["isolatedSession"].(bool); !v {
+		heartbeatMap["isolatedSession"] = true
+		changed = true
+	}
+	return changed
+}
+
 func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
@@ -892,66 +965,72 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 		changed = true
 	}
 
-	if v, _ := defaultsMap["bootstrapMaxChars"].(float64); v != 12000 {
-		defaultsMap["bootstrapMaxChars"] = 12000
+	if v, _ := defaultsMap["bootstrapMaxChars"].(float64); v != bootstrapMaxChars {
+		defaultsMap["bootstrapMaxChars"] = bootstrapMaxChars
 		changed = true
 	}
-	if v, _ := defaultsMap["bootstrapTotalMaxChars"].(float64); v != 30000 {
-		defaultsMap["bootstrapTotalMaxChars"] = 30000
-		changed = true
-	}
-
-	if v, _ := defaultsMap["thinkingDefault"].(string); v != "low" {
-		defaultsMap["thinkingDefault"] = "low"
+	if v, _ := defaultsMap["bootstrapTotalMaxChars"].(float64); v != bootstrapTotalMaxChars {
+		defaultsMap["bootstrapTotalMaxChars"] = bootstrapTotalMaxChars
 		changed = true
 	}
 
-	modelsMap := ensureMap(defaultsMap, "models")
-	// Autonomous entries come from the live API; non-autonomous ones (e.g. openai-codex) are appended here.
-	var knownModels []string
-	if resp, _, err := resolveModels(context.Background(), s.config.LLMBaseURL, s.config.LLMAPIKey); err != nil {
-		slog.Warn("ensureAgentDefaults: fetch models failed, skipping",
-			"component", "onboarding", "err", err)
-	} else {
-		for _, m := range resp.Models {
-			knownModels = append(knownModels, agentModelKey(m))
-		}
+	if pinSilentHeartbeat(defaultsMap) {
+		changed = true
 	}
-	knownModels = append(knownModels, "openai-codex/gpt-5.5")
-	for _, modelKey := range knownModels {
-		m, ok := modelsMap[modelKey].(map[string]interface{})
-		if !ok {
-			m = map[string]interface{}{}
-			modelsMap[modelKey] = m
+
+	if !s.config.LLMRuntimeManaged() {
+		if v, _ := defaultsMap["thinkingDefault"].(string); v != "low" {
+			defaultsMap["thinkingDefault"] = "low"
 			changed = true
 		}
-		params := ensureMap(m, "params")
-		if strings.Contains(modelKey, "claude-") {
-			if v, _ := params["cacheRetention"].(string); v != "short" {
-				params["cacheRetention"] = "short"
-				changed = true
+
+		modelsMap := ensureMap(defaultsMap, "models")
+		// Autonomous entries come from the live API; non-autonomous ones (e.g. openai-codex) are appended here.
+		var knownModels []string
+		if resp, _, err := resolveModels(context.Background(), s.config.LLMBaseURL, s.config.LLMAPIKey); err != nil {
+			slog.Warn("ensureAgentDefaults: fetch models failed, skipping",
+				"component", "onboarding", "err", err)
+		} else {
+			for _, m := range resp.Models {
+				knownModels = append(knownModels, agentModelKey(m))
 			}
 		}
-		if v, _ := params["fastMode"].(bool); !v {
-			params["fastMode"] = true
-			changed = true
+		knownModels = append(knownModels, "openai-codex/gpt-5.5")
+		for _, modelKey := range knownModels {
+			m, ok := modelsMap[modelKey].(map[string]interface{})
+			if !ok {
+				m = map[string]interface{}{}
+				modelsMap[modelKey] = m
+				changed = true
+			}
+			params := ensureMap(m, "params")
+			if strings.Contains(modelKey, "claude-") {
+				if v, _ := params["cacheRetention"].(string); v != "short" {
+					params["cacheRetention"] = "short"
+					changed = true
+				}
+			}
+			if v, _ := params["fastMode"].(bool); !v {
+				params["fastMode"] = true
+				changed = true
+			}
+			m["params"] = params
+			modelsMap[modelKey] = m
 		}
-		m["params"] = params
-		modelsMap[modelKey] = m
-	}
 
-	disableThinking := s.config.LLMThinkingDisabled()
-	wantReasoning := !disableThinking
-	if topModels, ok := configData["models"].(map[string]interface{}); ok {
-		if providers, ok := topModels["providers"].(map[string]interface{}); ok {
-			for _, provider := range providers {
-				if p, ok := provider.(map[string]interface{}); ok {
-					if modelsList, ok := p["models"].([]interface{}); ok {
-						for _, entry := range modelsList {
-							if m, ok := entry.(map[string]interface{}); ok {
-								if curr, _ := m["reasoning"].(bool); curr != wantReasoning {
-									m["reasoning"] = wantReasoning
-									changed = true
+		disableThinking := s.config.LLMThinkingDisabled()
+		wantReasoning := !disableThinking
+		if topModels, ok := configData["models"].(map[string]interface{}); ok {
+			if providers, ok := topModels["providers"].(map[string]interface{}); ok {
+				for _, provider := range providers {
+					if p, ok := provider.(map[string]interface{}); ok {
+						if modelsList, ok := p["models"].([]interface{}); ok {
+							for _, entry := range modelsList {
+								if m, ok := entry.(map[string]interface{}); ok {
+									if curr, _ := m["reasoning"].(bool); curr != wantReasoning {
+										m["reasoning"] = wantReasoning
+										changed = true
+									}
 								}
 							}
 						}
@@ -959,8 +1038,8 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 				}
 			}
 		}
-	}
 
+	}
 	if !changed {
 		return false, nil
 	}

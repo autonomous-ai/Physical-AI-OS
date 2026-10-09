@@ -25,6 +25,7 @@ def _orch(monkeypatch, *, idle_s: float, threshold: float = 45.0, agent=None):
         hal_config, "REALTIME_GEMINI_IDLE_PARK_S", threshold, raising=False
     )
     o = object.__new__(RealtimeOrchestrator)
+    o._lifecycle_lock = threading.Lock()
     o._started = threading.Event()
     o._started.set()
     o._rebuild_lock = threading.Lock()
@@ -92,6 +93,9 @@ def test_turn_in_flight_blocks_park(monkeypatch):
 
 def test_abandoned_turn_marker_expires(monkeypatch):
     """A prepared-then-abandoned turn must not disable parking forever."""
+    # A freshly booted host can have less than 900 s of monotonic uptime;
+    # use a fixed clock so the synthetic activity timestamp stays valid.
+    monkeypatch.setattr(time, "monotonic", lambda: 10_000.0)
     o = _orch(monkeypatch, idle_s=900)
     o._turn_in_flight = True
     o._turn_started_monotonic = time.monotonic() - 600

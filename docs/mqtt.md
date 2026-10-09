@@ -56,6 +56,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
   "mac": "{MAC address}",
   "time": "2026-03-26T17:00:00Z",
   "wakeword_enabled": false,
+  "voice_input_mode": "automatic",
   "agent_runtime": "openclaw"
 }
 ```
@@ -353,6 +354,7 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language`/`speed` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
+| `voice.input_mode` | Select voice input behavior (async ack) | `mode`: `automatic` or `tap_to_talk` |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Delete the stored OAuth token for a provider | `provider` |
@@ -568,19 +570,33 @@ those — poll `system.ota_versions` for the final state.
 
 An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind: <kind>"`.
 
+#### `voice.input_mode`
+
+**Receive:** `{"cmd":"data","kind":"voice.input_mode","data":{"mode":"tap_to_talk"}}`
+
+`automatic` is the default, including older configs without the field; it preserves the current flow and saved `wakeword` flag. `tap_to_talk` applies to the device runtime with Harness-only OFF: tap once to record with parallel STT/realtime upload, again to stop and commit realtime for a response or delegation without waiting for STT finalization or speaker identity; disabled/unavailable realtime falls back to an available STT `voice_command`. Gemini/OpenAI use manual streaming; Pipecat retains internal STT finalization, while GPT Live buffers until finish because it lacks manual commit. Silence does not auto-submit. It bypasses the wake gate/window without deleting the saved wake flag. During TTS, a tap only interrupts playback; the next tap records. The physical mic lock always applies.
+
+`mode` is required and accepts only `automatic` or `tap_to_talk`; invalid payloads return `failure` before mutation. Valid commands acknowledge `starting`, then `success` or `failure` with `data.mode`. HTTP/MQTT share the persistence/apply lock: save `voice_input_mode` to config.json, then call HAL `POST /voice/input-mode` with a 30-second timeout. Mode-only changes do not restart HAL or os-server; HAL cancels in-flight capture and reconfigures its voice worker/session. Success follows HAL application. Save/apply failures remain pending for a same-value retry; duplicates after success do not reapply. A combined change involving restart-required wake/boot/realtime fields still restarts once. MQTT info and BE ping report configured values, not proof of application; consult the terminal ack. Harness ON retains its separate tap flow.
+
 #### `wakeword.gate`
 
 Turns the top-level `wakeword` flag on or off. It uses the same asynchronous
-acknowledgement pattern as `realtime.set`: the device acknowledges receipt,
-persists the flag to `config.json`, restarts HAL when the value changes, then
-publishes the outcome.
+acknowledgement pattern as `realtime.set`: the device immediately acknowledges
+receipt with `starting`, then saves the flag and applies it in a background worker.
+Wake updates from MQTT and HTTP Settings are serialized.
 
 **Receive:** `{"cmd":"data","kind":"wakeword.gate","data":{"enabled":true}}`
 
 The terminal success acknowledgement echoes `{"enabled":true}`. Omitting
 `enabled` or supplying invalid JSON returns `status:"failure"`. `success`
-means the flag was saved and HAL is restarting; it does not wait for HAL to be
-ready.
+means the flag was saved and any required `systemctl restart` of HAL completed
+successfully (the restart command has a 30-second timeout); it does not verify
+voice pipeline readiness.
+Save errors, restart errors, and restart timeouts return `failure`. The config may
+already be saved when a restart fails. Within the current os-server process, a
+pending wake apply is retained after a save or restart failure, so retrying the
+same desired value retries the apply. Once applied successfully, an unchanged
+wake value does not trigger another restart.
 
 #### `timezone.set`
 
@@ -773,6 +789,12 @@ skills root, so it includes the skill dir). A basename or a `..` attempt does no
 resolve — lookup is an exact match against the listing, never a filesystem join.
 When `path` is supplied, the device reads only that file; a reference-heavy skill
 does not delay the reply by loading all of its other files first.
+
+Only skill content is listed. Dotfiles and build or editor leftovers are skipped
+and cannot be read by `path` either: `__pycache__/` and `node_modules/`
+directories, `Thumbs.db`, and files ending in `.pyc`, `.pyo`, `.swp`, `.swo`,
+`.tmp` or `.log` (the same set `scripts/release/upload-skills.sh` leaves out of a
+skill zip). The same rule applies to `GET /api/agent/skills/files`.
 
 **Synchronous** — reading a skill dir is local disk, so there is no `starting` ack.
 

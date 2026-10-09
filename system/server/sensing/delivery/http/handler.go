@@ -47,6 +47,13 @@ import (
 // model hands a turn to the main agent.
 const realtimeDelegationPrefix = "[voice-instruction]"
 
+// realtimeAlreadySpoke reports a voice turn whose user already heard realtime:
+// an explicit delegation, or a reply realtime answered aloud and HAL forwarded
+// as [realtime-handoff] (#564). Neither gets an opening filler.
+func realtimeAlreadySpoke(msg string) bool {
+	return strings.HasPrefix(msg, realtimeDelegationPrefix) || strings.Contains(msg, "\n[realtime-handoff] ")
+}
+
 var harnessAgentRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|have|message|use|delegate(?:\s+to)?|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu|dùng|dung)\s+(?:(?:the|a|an|một|mot)\s+)?(?:(?:harness|agent)(?:\s|$)|[\p{L}\p{N}_-]+\s+agent(?:\s|$))`)
 var harnessPossibleNamedRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|message|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu)\s+([\p{L}\p{N}_-]+)(?:\s|$)`)
 var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via|nhờ|hỏi|bảo|nho|hoi|bao)\s+(?:the\s+)?buddy)\b`)
@@ -89,6 +96,10 @@ func truncateHarnessFollowupContext(text string) string {
 
 // SensingEventRequest is the payload from HAL sensing detectors.
 type SensingEventRequest struct {
+	// CapturedAtMS preserves manual-device turn age across delayed dispatch.
+	CapturedAtMS int64 `json:"captured_at_ms,omitempty"`
+	// SuppressAutoFillers keeps unaddressed follow-ups silent while the agent decides.
+	SuppressAutoFillers bool `json:"suppress_auto_fillers,omitempty"`
 	// VoiceTurnType records wake admission for diagnostics, never routing.
 	VoiceTurnType string `json:"voice_turn_type,omitempty"`
 	// Type is the event category: motion, sound, presence.enter, presence.leave, light.level, etc.
@@ -239,6 +250,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, "")
 	}
 	startPayload := map[string]any{"type": req.Type, "message": req.Message, "interaction_id": req.InteractionID}
+	if req.SuppressAutoFillers {
+		startPayload["suppress_auto_fillers"] = true
+	}
 	if kind := req.voiceTurnType(); kind != "" {
 		startPayload["voice_turn_type"] = kind
 	}
@@ -516,7 +530,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			var queuedRunID string
 			if isChat || isVoice {
 				_, queuedRunID = h.agentGateway.NextChatRunID()
+				queuedRunID = manualCaptureRunID(queuedRunID, req, time.Now())
 				telemetry.ReportTaskStarted(req.Type, req.InteractionID, queuedRunID)
+				if isVoice && req.SuppressAutoFillers {
+					DefaultFillerManager.SuppressRun(queuedRunID)
+				}
 				if isChat {
 					h.agentGateway.MarkWebChatRun(queuedRunID)
 				}
@@ -593,6 +611,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	}
 
 	reqID, runID := h.agentGateway.NextChatRunID()
+	runID = manualCaptureRunID(runID, req, time.Now())
 	req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, runID)
 	startPayload["interaction_id"] = req.InteractionID
 	flow.SetTrace(runID)
@@ -659,11 +678,17 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// mark. Delegated turns skip the opening filler (realtime already gave one).
 	if isVoice {
 		hal.StartVoiceFollowup(followupInteractionID, runID)
-		if strings.HasPrefix(req.Message, realtimeDelegationPrefix) {
+		if req.SuppressAutoFillers {
+			DefaultFillerManager.SuppressRun(runID)
+		} else if realtimeAlreadySpoke(req.Message) {
 			DefaultFillerManager.MarkDelegatedVoiceRun(runID, req.InteractionID)
 		} else {
 			DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)
-			go PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
+			go func() {
+				if !DefaultFillerManager.Superseded(runID) {
+					PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
+				}
+			}()
 		}
 	}
 

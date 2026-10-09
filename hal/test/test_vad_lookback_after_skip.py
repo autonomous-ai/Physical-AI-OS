@@ -1,3 +1,4 @@
+import threading
 """A trigger the live noise-guard rejects must not erase the pre-roll."""
 
 from unittest.mock import Mock, patch
@@ -19,7 +20,12 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     mic.read.side_effect = lambda _: (next(frames), False)
 
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
     service._running = True
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._np = np
     service._tts_is_speaking.return_value = False
     service._music_is_playing.return_value = False
@@ -41,8 +47,7 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     monkeypatch.setattr(module.voice_cfg, "SPEECH_HOLDOFF_S", 0.0)
     monkeypatch.setattr(module.voice_cfg, "SESSION_COOLDOWN_S", 0.0)
     monkeypatch.setattr(module.voice_cfg, "PRE_ROLL_FRAMES", 12)
-    with patch.object(module, "read_voice_mode", return_value={}), \
-         patch.object(module, "bypass_realtime", return_value=False), \
+    with patch.object(module, "read_voice_mode", return_value={"enabled": False, "generation": 0}), \
          patch.object(module, "resample_to_stt", side_effect=lambda f, *a: f):
         module.VoiceService._vad_loop(service, mic, 320, 16000)
 

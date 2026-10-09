@@ -1515,6 +1515,11 @@ log "Phase 5 — finalize"
 
 mv -f "${MNT}/etc/resolv.conf.bak" "${MNT}/etc/resolv.conf" 2>/dev/null || true
 
+# The board has no battery RTC and boots with a stale kernel clock; until NTP
+# syncs, every HTTPS call during setup fails "certificate not yet valid".
+# fake-hwclock only moves the clock forward, so seed it with the build time.
+date -u '+%Y-%m-%d %H:%M:%S' > "${MNT}/etc/fake-hwclock.data"
+
 for pid in $(lsof -t +D "${MNT}" 2>/dev/null || true); do
   kill -9 "$pid" 2>/dev/null || true
 done

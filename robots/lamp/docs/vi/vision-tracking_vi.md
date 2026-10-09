@@ -182,7 +182,9 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 
 Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportional chết `GIMBAL_*` / `EMA_ALPHA` đã bị xoá khi tách package.)
 
-Đặt `HAL_TRACKING_MAX_DURATION_S` trong `/opt/hal/.env` của Lamp để chọn giới hạn thời gian thực cho một session; mặc định Lamp đã cài là `10`. Khởi động lại service `hal` sau khi đổi.
+Đặt `HAL_TRACKING_MAX_DURATION_S` trong `/opt/hal/.env` của Lamp để chọn giới hạn thời gian thực cho một session; mặc định Lamp đã cài là `10`. Khởi động lại service `hal` sau khi đổi. Một lần gọi `/servo/track` có thể truyền `max_duration_s` để
+dừng sớm hơn (không bao giờ quá giới hạn này): cái nhìn khi chào trong sensing skill dùng `3`, vì đèn
+chào xong mà bám chặt một khuôn mặt 10 giây thì giống camera theo dõi, không giống một cái nhìn nhận ra.
 
 ### Giới hạn vị trí servo
 
@@ -520,7 +522,9 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   pha quét thậm chí không hiện ra trong Monitor. Agent chờ body rồi trả lời dựa trên đó, đúng theo
   cách `/api/vision/look` vẫn đang làm.
 - họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
-- **look-aim sắp bỏ cuộc** — trước khi `look_lost` tuyên bố *"Tôi không tìm thấy bạn"*, câu mà đến giờ
+- **look-aim sắp bỏ cuộc** — nhưng chỉ là một cái **liếc** (`glance=True`, 2 lần nhìn tại bearing,
+  không có `look_still_searching`), không phải pha quét đầy đủ: được nhờ nhìn mà không thấy ai thì
+  một sinh vật liếc quanh, không quét cả phòng. Trước khi `look_lost` tuyên bố *"Tôi không tìm thấy bạn"*, câu mà đến giờ
   nó vẫn nói sau khi mới chỉ quay về một bearing đã ghi nhớ. Bearing là phỏng đoán về nơi người ta
   *từng* ở, không phải một lần tìm, nên câu đó phải được xứng đáng. Hạn chót của pha ngắm **ngừng đếm**
   trong suốt thời gian quét (`t_end += time.monotonic() - swept_at` trong `aim_for_look`): hạn chót tồn
@@ -528,7 +532,7 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   chuyện đó rồi, và tính pha quét vào một ngân sách nó không thể vừa nghĩa là không bao giờ được quét.
 - **watcher gaze ở một mình quá lâu** — `HAL_GAZE_SWEEP_AFTER_S` (30 s) không thấy ai, hoặc một lần
   repoint đã quay về bearing mà không thấy ai ở đó. Đường này không ai yêu cầu, nên nó là đường duy
-  nhất có cooldown — xem *Tự quay quanh tìm*.
+  nhất có cooldown và chỉ là một cái **liếc**, không phải pha quét này — xem *Tự quay quanh tìm*.
 
 `POST /servo/search` — quét tìm một đối tượng. Body (tất cả đều tuỳ chọn): `{"target": "cup", "exhaustive": true}`.
 
@@ -601,7 +605,7 @@ quanh của gaze watcher) đi theo `USER_LOOK_CIRCLE`: vẫn sáu lần nhìn đ
 tâm, trái, vòng qua **đỉnh**, ra phải. Khuôn mặt nằm ngang hoặc cao hơn góc nhìn lúc ngồi mà pha quét
 bắt đầu từ đó; các lần nhìn đáy chỉ vào bàn và bàn phím. Đo trên green-lamp 30/09/2026: một user đang
 đứng, đầu cao hơn mọi lần nhìn, đã bị bỏ sót qua cả 18 lần nhìn. Tìm đồ vật (`POST /servo/search`,
-"tìm đồ của tôi") và pha quét dự phòng của look-aim vẫn giữ vòng nhìn xuống, nơi có đồ trên bàn. Các
+"tìm đồ của tôi") vẫn giữ vòng nhìn xuống, nơi có đồ trên bàn. Các
 lần nhìn lên dùng chung giới hạn `WRIST_PITCH_MIN` mô tả bên dưới.
 
 **Chỉ `wrist_roll` và `wrist_pitch` di chuyển trong một lần nhìn.** Đế chỉ xoay một lần cho mỗi bearing
@@ -632,8 +636,9 @@ tâm trông như bồn chồn khi đầu đèn cũng đang ngó quanh ở từng
 góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà đầu thì ngay ngắn.
 
 **Khi gaze watcher tự quét, nó tìm user chứ không tìm bất kỳ ai (#545).** `gaze._maybe_sweep`
-gọi `search_for_subject(for_user=True)`. Mọi nơi gọi khác giữ nguyên hành vi hiện tại:
-`POST /servo/search` (đồ vật, `exhaustive`) và pha quét dự phòng riêng của look-aim. Ở mỗi lần nhìn,
+gọi `search_for_subject(for_user=True, glance=True)`. Mọi nơi gọi khác giữ nguyên hành vi hiện tại:
+`POST /servo/search` (đồ vật, `exhaustive`); pha dự phòng của look-aim cũng chỉ là cái liếc, nhưng
+không có user check. Ở mỗi lần nhìn,
 nó quan sát các khuôn mặt trong khung khoảng 1.5 s (`user_check.observe_faces`, 6 frame; bỏ qua bước
 chờ này khi frame đầu không có mặt nào) và chỉ dừng ở một cái mặt qua được
 `user_check.adopts_bearing`: cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình,
@@ -713,16 +718,17 @@ os-server sở hữu các câu, phần phân giải ngôn ngữ và cache WAV (`
 |---|---|---|
 | `look_searching` | bước đầu tiên về phía bearing đã ghi nhớ | **bật** (`HAL_LOOK_AIM_SPEAK`) |
 | `look_found` | có người xuất hiện **sau khi** đã thông báo đang tìm | bật (cùng cờ) |
-| `look_still_searching` | điểm giữa của pha quét — điểm dừng 2/3, đầu ở giữa (`_say_at_the_midpoint`) | bật (`HAL_LOOK_AIM_SPEAK`) |
+| `look_still_searching` | điểm giữa của pha quét đầy đủ (`/servo/search`) — điểm dừng 2/3, đầu ở giữa (`_say_at_the_midpoint`). Không bao giờ phát trong cái liếc của look-aim | bật (`HAL_LOOK_AIM_SPEAK`) |
 | `look_capturing` | pha ngắm thực sự đã di chuyển trước khi bấm máy | bật (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
 
 Phần chặn quan trọng hơn bản thân các câu nói. **Không nói gì khi đối tượng đã nằm giữa sẵn** — lần chụp
 đó xong trong vài trăm mili giây, nên mọi câu ở đây đều có điều kiện là pha ngắm thực sự đã phải di
 chuyển. *"Bạn đây rồi"* chỉ phát ra như phần kết của một lần tìm đã được thông báo, không bao giờ đứng
 một mình. Trạng thái đang tìm chỉ thông báo **một lần** mỗi pha quét chứ không phải mỗi bước, cộng
-thêm đúng một câu `look_still_searching` ở điểm giữa — pha quét dài ~20 s, và không có câu đó thì câu
-mở đầu và câu kết luận nằm hai bên một khoảng lặng hai mươi giây, nghe như một cái đèn đã đứng máy chứ
-không phải một cái đèn đang tìm. Còn câu lúc chụp chỉ phát khi pha ngắm thực sự đã di chuyển
+thêm đúng một câu `look_still_searching` ở điểm giữa của pha quét đầy đủ — pha đó dài ~20 s, và không
+có câu đó thì câu mở đầu và câu kết luận nằm hai bên một khoảng lặng hai mươi giây, nghe như một cái đèn
+đã đứng máy chứ không phải một cái đèn đang tìm. Cái liếc của look-aim chỉ ~4 s và không nói gì ở giữa:
+kể lể một cái liếc ngắn là kiểu máy báo trạng thái. Còn câu lúc chụp chỉ phát khi pha ngắm thực sự đã di chuyển
 (`res.aimed and res.iterations > 0`): pha ngắm không động gì thì không nói gì, và — phần đã sai cho tới
 nhánh này — pha ngắm đã tìm rồi **thất bại** cũng không nói gì, trước đây nó nối ngay
 *"Tôi không tìm thấy bạn"* với *"Để tôi nhìn thử"*.
@@ -750,6 +756,16 @@ Không kiểu nào trong hai kiểu trên báo gì ở bất kỳ mức log nào
 phân giải ra rỗng đơn giản là một cái đèn không nói gì.
 
 ## Canh khung gaze — giữ user trong khung hình
+
+Gaze tạm ngừng lấy mẫu khi chuyển vào idle và trong 350 ms sau frame playback
+idle đầu tiên. Sau đó gaze lấy mẫu ngay trong **vòng idle đầu tiên**, không chờ
+chạy hết recording. Trước đây `_idle_settled` chỉ thành true khi hết vòng đầu,
+nên các lệnh servo idle lặp lại có thể chặn gaze cả vòng dù tư thế không đổi.
+Timestamp playback riêng không đổi cờ tiếng ồn motor, ngưỡng chấp nhận gaze,
+hay điều kiện không xoay tìm lại khi đã thấy mặt. Với cấu hình 6 mẫu/s, gaze
+có thể lấy mẫu ở vòng watcher kế tiếp sau khoảng 350 ms; vẫn có thêm thời gian
+camera/xử lý thực tế. Ranh giới này đã có test playback xác định, chưa có số đo
+latency mới trên device.
 
 Mọi thứ ở trên đều là do được yêu cầu: một lệnh nhìn, một phiên track, một lần tìm. Phần này là
 watcher trong `hal/drivers/tracking/gaze.py` tự làm những việc đó mà không ai bảo, để đến lúc user
@@ -914,38 +930,64 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
 
 - **Kết luận dựa trên một cái mặt, không bao giờ dựa trên thân người (#545).** Một cái mặt cao ít nhất
   `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình là xác nhận bearing. Không cần nhìn về đèn, không
-  cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Chỉ mặt nhỏ hơn mới là trượt:
+  cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Mặt nhỏ hơn không được tính là
+  mặt (xem "Mặt xa không phải là mặt" ở dưới), nên repoint chỉ thấy mặt như vậy là trượt:
   trong văn phòng mở, lưng của một đồng nghiệp đã xác nhận bearing, và một khuôn mặt nghiêng 12–25 px ở
   phía bên kia phòng đã trở thành "user". **Chỉ kích thước quyết định gần hay xa.** Vị trí thì không:
   một bearing lệch vài độ so với chỗ ngồi của user sẽ đẩy họ ra mép khung, và một cổng ±15% quanh tâm
   khung thử ngày 30/09/2026 đã xếp chính khuôn mặt 35% của user (dx +34%) vào loại "xa". Thay vào đó kích thước
   tách hai người ra: trong các frame ngày 30/09/2026, người ngồi bàn bên cạnh chỉ đạt tối đa 13.6% còn
   user không bao giờ dưới 19.2%, nên ngưỡng đặt ở 15%. Watcher
-  đóng dấu đồng hồ mặt-gần và mặt-xa (`_note_face_size`) cho mỗi mặt phát hiện được, và phần kết luận đọc
-  hai đồng hồ đó.
+  đóng dấu đồng hồ mặt-gần (`_note_face_size`) cho mỗi mặt nó nhận được, và phần kết luận đọc đồng hồ đó.
 - **Chỉ thân người có đầu nằm trên khung mới chờ phần leo tìm.** Một box người bị mép trên khung cắt
   (phép kiểm tra của `_headroom_from_person`) đóng dấu `_last_headless_body_t`, và chỉ nó mới bắt đầu leo
   tìm. Một thân người nằm trọn trong khung thì đã cho thấy khuôn mặt nếu có, nên được chấm theo các mặt:
-  mặt gần = trúng, chỉ mặt xa = trượt, không có mặt = trượt (`found a body but no face`). Đo trên thiết
+  mặt gần = trúng, còn lại thì **kích thước** quyết định (#567). Một box
+  người gần nhất chiếm ít nhất `HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC` (20%) khung hình là một người
+  đang ngồi ở bàn mà detector bỏ sót mặt — ngồi nghiêng, cúi xuống — và lần repoint **không được chấm**
+  (không bị trừ, không quay quanh tìm), kể cả khi trong khung có mặt của một đồng nghiệp. Thân nhỏ hơn =
+  trượt (`found a body but no face`), không có ai cũng vậy. Chiều cao không phân biệt được: ngày 05/10/2026
+  một người không phải user đạt 73% chiều cao khung. Diện tích thì được: user ngồi đo được 26–73% khung
+  hình trên ba đèn, đồng nghiệp và người đi ngang tối đa 13%. Thân gần **không bao giờ xác nhận**
+  bearing. Cùng quy tắc đó áp dụng khi kết thúc leo tìm: leo tìm kết thúc với một thân gần thì không được
+  chấm. Mỗi kết luận repoint đều log box người lớn nhất đã thấy
+  (`largest body N% of frame`) để chỉnh ngưỡng từ log thiết bị. Đo trên thiết
   bị 30/09/2026: cả người user nằm trong khung đã kích hoạt một lần "leo tìm" mà đầu không hề di chuyển.
   Thân người mất đầu sẽ kích hoạt phần leo tìm ở trên và giữ
   kết luận tối đa `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), tiếp tục kích hoạt leo tìm kể cả khi không có
-  cuộc hội thoại nào đang mở. Mặt gần = trúng, chỉ có mặt xa = trượt, không có mặt nào = **không chấm**.
+  cuộc hội thoại nào đang mở. Mặt gần = trúng; thân gần = **không chấm**; chỉ có thân người quá nhỏ để đang ngồi ở bàn =
+  **trượt** (một đồng nghiệp đứng bên kia phòng, bị mép trên khung cắt, mặt nhỏ của họ không được tính
+  là mặt); không có ai = **không chấm**. Phần thân bị cắt của chính user luôn là thân gần.
   Chấm một lần repoint chỉ thấy thân là trượt đã từng xoá mất những bearing đúng trong khi user đang
   ngồi ngay trước đèn.
-- **Một mặt xa không che mất thân người trong lúc đang chấm repoint.** Bình thường watcher chỉ tìm thân
-  người khi không thấy mặt nào, nên khuôn mặt nhỏ của một đồng nghiệp bên kia phòng (dưới
-  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`) đã che mất một user đang đứng ngay trước đèn với đầu nằm trên
-  khung hình: không có thân, không leo tìm, "found only a far face", thành trượt (đo trên green-lamp
-  30/09/2026). Trong lúc kết luận repoint hoặc phần leo tìm của nó còn đang chờ (`_judging_repoint`),
-  một mặt xa cũng kích hoạt phát hiện người (`_body_behind_a_far_face`). Thân người tìm được theo cách
-  đó được tính là thân, và `dy` của phần leo tìm lấy từ mép trên của thân chứ không từ mặt xa. Ngoài
-  khoảng thời gian đó thì không chạy: văn phòng gần như lúc nào cũng có một mặt xa, và chạy phát hiện
-  người trên hầu hết các mẫu sẽ tốn CPU.
+- **Mặt xa không phải là mặt (#567).** Bộ chọn mặt (`detect_face_with_landmarks`) chỉ trả về những mặt
+  cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình, và không bao giờ nhỏ hơn
+  `HAL_GAZE_MIN_FACE_PX`; trong số đó mặt gần tâm nhất được chọn. Mặt nhỏ hơn bị bỏ, không có phương án
+  dự phòng lấy mặt to nhất. Trước đây nó vẫn được trả về làm "cái mặt" mỗi khi không tìm thấy mặt của
+  user, mà watcher chỉ tìm thân người khi không thấy mặt nào. Vì vậy khuôn mặt nhỏ của một đồng nghiệp
+  đã che mất một user đang đứng ngay trước đèn (green-lamp 30/09/2026: không có thân, không leo tìm,
+  thành trượt), kéo phần pan về phía đồng nghiệp, và lúc 16:33:42 ngày 05/10/2026 (green-lamp) đã che
+  mất gáy của user chiếm 30% khung hình, nên guard thân gần ở dưới không bao giờ kích hoạt. Giờ mẫu như
+  vậy đi theo đường không có mặt: phát hiện người chạy, thân user quyết định `dy` của phần leo tìm và
+  đồng hồ thân gần, và không có pan nào. Cái giá là một lượt YOLO tìm người trên các mẫu đó, giống như
+  mọi mẫu không có mặt.
+  Thân người mà gaze xét là box người **gần nhất** — box cao nhất trong số các box đủ gần để là người
+  đang nói, cùng quy tắc `_pick_nearest` mà look-aim và search dùng — chứ không phải box có độ tin cậy
+  cao nhất của `detect()`. Trên lamp-4ace (05/10/2026 13:48:51), box 30% của user với độ tin cậy 0.78
+  đã thua box 4% của một đồng nghiệp với 0.83, nên phần thân bị cắt của user không bao giờ kích hoạt
+  leo tìm. Các box ứng viên chỉ lấy từ YOLO cục bộ (`detect_candidates`), không bao giờ dùng phương án
+  dự phòng YOLO-World từ xa như `detect()`: với `HAL_TRACKING_DETECT_LOCAL=false` hoặc không có weights
+  cục bộ, gaze không thấy thân người nào — không leo tìm và không có bằng chứng thân gần.
 - **Nó sẽ không quay đi khỏi một cái mặt đang có trong khung.** Nếu vừa thấy mặt trong
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
   ai.
+- **Cũng không quay đi khỏi một người đang ngồi trước nó (#567).** `blind` lúc bắt đầu nói nghĩa là có
+  ít hơn `HAL_GAZE_MIN_SAMPLES` mặt đo được trong `HAL_GAZE_WINDOW_S` vừa qua: không tìm thấy mặt, hoặc
+  bộ lấy mẫu không có mẫu mới. Nó không nói gì về thân người. Nếu box người gần nhất là thân gần (xem ở
+  trên) trong `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, lần reacquire sẽ từ chối (`no repoint: someone is
+  already in front of the lamp`): đèn đã hướng về user rồi, và quay đi chỉ có thể dẫn tới một kết luận
+  sai. User được đo là *đang nhìn đi chỗ khác* là một kết luận khác (`skip`) và không bao giờ repoint.
 - **Hold kết thúc cùng câu nói.** Reacquire do speech kích hoạt ngắm đèn bằng `move_and_hold`,
   hàm này bỏ recording đang phát và set `_idle_settled` — đúng cho lúc đang nói, sai sau khi nói
   xong, vì không ai bật lại idle nữa. Đèn đứng im luôn cho tới khi restart HAL (đo trên lamp-0c89
@@ -959,8 +1001,13 @@ ra mỗi phút một lần thay vì mỗi vòng một lần.
 
 ### Tự quay quanh tìm
 
-Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có mặt xa), `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
-`confirmed_miss=True`. Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
+Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có thân người quá nhỏ để đang ngồi ở bàn), `_verify_repoint` gọi `_maybe_sweep` với
+`confirmed_miss=True`, và nó chỉ **liếc** chứ không quét: `glance=True` giữ đế ở bearing gốc và chỉ đi
+qua `GLANCE_LOOKS` — đầu liếc trái 45°, rồi phải 45° — tức 2 lần nhìn, khoảng 4 s, không nói câu
+`look_still_searching`. Xong thì về lại tư thế ban đầu và thôi. Nguyên tắc là *một sinh vật có làm vậy
+không?*: quay về phía tiếng gọi mà không thấy ai thì liếc quanh một chút; không ai đi quét phòng
+3 hướng × 6 lần nhìn như camera an ninh — đó chính là cảm giác khi pha quét đủ 18 lần nhìn tự chạy
+mà không ai yêu cầu. Pha quét đầy đủ chỉ còn cho lúc có người yêu cầu tìm (`/servo/search`). Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
 đã nói mà nó không tìm ra họ, chứ không bao giờ vì một căn phòng trông có vẻ trống. Cò kích hoạt theo
 vắng mặt (`HAL_GAZE_SWEEP_AFTER_S`) vẫn còn trong `_maybe_sweep` nhưng không còn gì với tới nó — vòng
 lặp watcher không còn gọi pha quét nữa. Các cooldown vẫn áp dụng, và có tới hai vì hai tình huống không
@@ -982,13 +1029,13 @@ nhìn thấy hai lần. Mặt chỉ được tính là bằng chứng cho repoin
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
-| `HAL_GAZE_SWEEP` | `true` | Bật/tắt tự quay quanh tìm. |
-| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Không thấy ai trong bao lâu. Dài hơn `HAL_GAZE_REPOINT_AFTER_S` (12 s) để nước đi rẻ luôn được thử trước và pha quét ~20 s vẫn là bước leo thang chứ không phải phản xạ. |
+| `HAL_GAZE_SWEEP` | `true` | Bật/tắt tự liếc quanh tìm. |
+| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Không thấy ai trong bao lâu. Dài hơn `HAL_GAZE_REPOINT_AFTER_S` (12 s) để nước đi rẻ luôn được thử trước và cái liếc ~4 s vẫn là bước leo thang chứ không phải phản xạ. |
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Giữa hai pha quét khi đã có bearing. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Giữa hai pha quét khi chưa có bearing nào. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Tỉ lệ mẫu nhìn về đèn cần có để nhận một bearing mới. Thấp hơn mức 0.6 của cổng wake: một user ngồi yên đo được 50%. Không phải 0.3: cửa sổ chỉ có 2–3 mẫu, nên 0.3 nghĩa là chỉ cần liếc một cái. |
 | `HAL_GAZE_BEARING_MAX_YAW_DEG` | 25 | Góc yaw của đầu được tính là nhìn về đèn khi nhận bearing mới. Giới hạn riêng, không bao giờ nới ở mép khung, nên việc chỉnh cổng wake không làm nó lỏng ra. |
-| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Chiều cao mặt (so với chiều cao khung) được tính là đủ gần để đang ngồi ở bàn, cho mọi đường kiểm tra user. Đo trong các frame: đồng nghiệp trong văn phòng 8.3–13.6%, user 19.2–46%. Đèn đặt xa user hơn có thể cần hạ giá trị này trong `.env`. |
+| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Chiều cao mặt (so với chiều cao khung) được tính là đủ gần để đang ngồi ở bàn, cho mọi đường kiểm tra user. Bộ chọn mặt của gaze cũng bỏ hẳn mọi mặt nhỏ hơn (#567), nên nó cũng chặn phiếu bầu của gaze wake và các mẫu pan. Đo trong các frame: đồng nghiệp trong văn phòng 8.3–13.6%, user 19.2–46%. Đèn đặt xa user hơn có thể cần hạ giá trị này trong `.env`. |
 
 ### Bearing người dùng đã ghi nhớ
 

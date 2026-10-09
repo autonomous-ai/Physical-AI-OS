@@ -56,6 +56,7 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
   "mac": "{MAC address}",
   "time": "2026-03-26T17:00:00Z",
   "wakeword_enabled": false,
+  "voice_input_mode": "automatic",
   "agent_runtime": "openclaw"
 }
 ```
@@ -342,6 +343,7 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language`/`speed` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
+| `voice.input_mode` | Chọn cách nhập giọng nói (ack bất đồng bộ) | `mode`: `automatic` hoặc `tap_to_talk` |
 | `timezone.set` | Áp dụng múi giờ IANA của device (bất đồng bộ; ack `starting`) | `timezone` (bắt buộc, ví dụ `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Lưu/thay token OAuth cho một provider | `provider`, `access_token`, tùy chọn `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Xóa token OAuth đã lưu của provider | `provider` |
@@ -553,17 +555,31 @@ hãy poll `system.ota_versions` để lấy trạng thái cuối.
 
 `kind` không hợp lệ sẽ phản hồi `status:"failure"` kèm `error:"unknown kind: <kind>"`.
 
+#### `voice.input_mode`
+
+**Nhận:** `{"cmd":"data","kind":"voice.input_mode","data":{"mode":"tap_to_talk"}}`
+
+`automatic` là mặc định (kể cả config cũ thiếu trường); giữ nguyên flow hiện tại và dùng cờ `wakeword` đã lưu. `tap_to_talk` dành cho runtime trên device khi Harness-only OFF: chạm một lần bắt đầu thu và upload song song tới STT/realtime, chạm lần nữa kết thúc và commit realtime để trả lời hoặc delegate mà không chờ STT chốt hay nhận diện người nói; realtime tắt/không khả dụng thì fallback sang STT `voice_command` sẵn có. Gemini/OpenAI dùng streaming với commit thủ công; Pipecat giữ bước chốt STT nội bộ, còn GPT Live giữ audio tới tap kết thúc vì không có manual commit. Im lặng không tự gửi. Chế độ này bỏ qua wake gate/window và không xóa cờ wake đã lưu. Khi đang phát TTS, chạm chỉ ngắt; chạm tiếp theo mới thu. Khóa mic vật lý luôn có hiệu lực.
+
+`mode` là bắt buộc, chỉ nhận `automatic` hoặc `tap_to_talk`. Payload sai trả `failure` trước khi thay đổi. Lệnh hợp lệ ACK `starting`, rồi `success`/`failure` kèm `data.mode`. HTTP/MQTT dùng chung khóa lưu và áp dụng: lưu `voice_input_mode` vào config.json, gọi HAL `POST /voice/input-mode` với timeout 30 giây. Đổi riêng mode không restart HAL hay os-server; HAL hủy lượt thu đang dở và cấu hình lại voice worker/session. ACK success chỉ sau khi HAL áp dụng xong. Lỗi lưu/apply giữ trạng thái chờ để gửi lại cùng giá trị; gửi trùng sau thành công không áp dụng lại. Nếu cùng request đổi cả trường cần restart (wake/boot/realtime), vẫn chỉ restart một lần. MQTT info và BE ping phản ánh giá trị đã cấu hình, không chứng minh apply thành công; xem terminal ACK. Harness ON giữ luồng tap riêng.
+
 #### `wakeword.gate`
 
 Bật hoặc tắt cờ `wakeword` top-level. Lệnh dùng cùng kiểu ack bất đồng bộ như
-`realtime.set`: device ack đã nhận, lưu cờ vào `config.json`, restart HAL khi
-giá trị thay đổi, rồi publish kết quả.
+`realtime.set`: device ack `starting` ngay khi nhận, rồi lưu cờ và áp dụng trong
+worker chạy nền. Các cập nhật wake từ MQTT và HTTP Settings được xử lý tuần tự.
 
 **Nhận:** `{"cmd":"data","kind":"wakeword.gate","data":{"enabled":true}}`
 
 Ack `success` cuối cùng echo lại `{"enabled":true}`. Thiếu `enabled` hoặc JSON
-không hợp lệ trả `status:"failure"`. `success` nghĩa là cờ đã được lưu và HAL
-đang restart; không đợi HAL sẵn sàng.
+không hợp lệ trả `status:"failure"`. `success` nghĩa là cờ đã được lưu và lệnh
+`systemctl restart` HAL, nếu cần, đã hoàn tất thành công (riêng lệnh restart có
+timeout 30 giây); chưa
+xác nhận voice pipeline sẵn sàng. Lỗi lưu, lỗi restart và restart quá thời gian
+đều trả `failure`. Config có thể đã được lưu khi restart thất bại. Trong tiến
+trình os-server hiện tại, trạng thái wake chờ áp dụng được giữ lại sau lỗi lưu
+hoặc restart, nên gửi lại cùng giá trị mong muốn sẽ thử áp dụng lại. Khi đã áp
+dụng thành công, giá trị wake không đổi sẽ không gây thêm lần restart.
 
 #### `timezone.set`
 
@@ -749,6 +765,12 @@ kèm tên thư mục skill). Truyền basename hay thử `..` đều không kh�
 khớp chính xác với listing, không bao giờ join đường dẫn trên filesystem.
 Khi có `path`, device chỉ đọc file đó; skill có nhiều reference/asset sẽ không
 làm chậm phản hồi vì phải nạp mọi file còn lại trước.
+
+Chỉ liệt kê nội dung của skill. Dotfile và file rác do build hoặc editor sinh ra
+bị bỏ qua, và cũng không đọc được qua `path`: thư mục `__pycache__/` và
+`node_modules/`, `Thumbs.db`, và file có đuôi `.pyc`, `.pyo`, `.swp`, `.swo`,
+`.tmp` hoặc `.log` (cùng danh sách mà `scripts/release/upload-skills.sh` loại khỏi
+zip của skill). `GET /api/agent/skills/files` áp dụng cùng quy tắc.
 
 **Đồng bộ** — đọc thư mục skill là đọc đĩa local, nên không có ack `starting`.
 

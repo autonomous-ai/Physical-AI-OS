@@ -13,7 +13,16 @@ from hal.drivers.voice import voice_service as module
 
 
 def service(monkeypatch):
+    from hal import app_state
+
+    for name in ("_mic_muted", "_hw_mic_switch_muted", "_sleeping", "_enrolling"):
+        monkeypatch.setattr(app_state, name, False)
     s = object.__new__(module.VoiceService)
+    s._automatic_reply_lock = threading.Lock()
+    s._automatic_reply_stop = None
+    s._automatic_reply_cancelled_at = None
+    s._stt_drain_worker = None
+    s._stt_drain_future = None
     s._lifecycle_lock = threading.Lock()
     s._lifecycle_revision = 0
     s._mic_lock = threading.Lock()
@@ -23,6 +32,7 @@ def service(monkeypatch):
     s._running = True
     s._wakeword_focus = Mock()
     s._harness_capture = Mock()
+    s.device_input = module.DeviceTapInput(s._harness_capture, s.start_harness_capture)
     s._turn_detector = None
     s._np = np
     s._sd = Mock()
@@ -32,7 +42,8 @@ def service(monkeypatch):
     return s
 
 
-def test_stop_reaps_recorder_and_unblocks_read(monkeypatch):
+@pytest.mark.parametrize('low_latency', [False, True])
+def test_stop_reaps_recorder_and_unblocks_read(monkeypatch, low_latency):
     s = service(monkeypatch)
     popen = subprocess.Popen
     children = []
@@ -50,7 +61,7 @@ def test_stop_reaps_recorder_and_unblocks_read(monkeypatch):
 
     def capture():
         try:
-            with s._capture(ArecordStream('test', 16000, 1, 320, np)) as mic:
+            with s._capture(ArecordStream('test', 16000, 1, 320, np, low_latency=low_latency)) as mic:
                 reading.set()
                 while s._running:
                     mic.read(320)
@@ -82,6 +93,29 @@ def test_abort_kills_and_reaps_unresponsive_recorder():
     proc.terminate.assert_called_once()
     proc.kill.assert_called_once()
     assert proc.wait.call_count == 2
+
+
+def test_manual_recorder_bounds_unresponsive_pipe_teardown():
+    stream = ArecordStream('test', 16000, 1, 320, np, low_latency=True)
+    proc = Mock()
+    proc.poll.return_value = None
+    proc.wait.side_effect = [subprocess.TimeoutExpired('arecord', .1), -9]
+    stream._proc = proc
+    stream.abort()
+    assert proc.wait.call_args_list[0].kwargs == {'timeout': .1}
+    proc.kill.assert_called_once()
+    assert proc.wait.call_count == 2
+
+
+@pytest.mark.parametrize('low_latency', [False, True])
+def test_only_manual_recorder_requests_short_period(monkeypatch, low_latency):
+    popen = Mock()
+    monkeypatch.setattr('hal.drivers.voice._internal.audio_recorder.subprocess.Popen', popen)
+    stream = ArecordStream('test', 16000, 1, 320, np, low_latency=low_latency)
+    stream.__enter__()
+    command = popen.call_args.args[0]
+    assert ('--period-time=10000' in command) == low_latency
+    assert not any(arg.startswith('--buffer-time') for arg in command)
 
 
 def test_stopped_service_cannot_open_capture(monkeypatch):
@@ -190,3 +224,14 @@ def test_constructor_failure_does_not_start_optional_workers(monkeypatch):
     with pytest.raises(RuntimeError, match='mock realtime init failure'):
         module.VoiceService(stt_provider=Mock())
     decorator.assert_not_called()
+
+
+@pytest.mark.parametrize('gate', ['_mic_muted', '_hw_mic_switch_muted', '_sleeping', '_enrolling'])
+def test_deferred_restart_respects_privacy_and_capture_ownership(monkeypatch, gate):
+    from hal import app_state
+
+    s = service(monkeypatch)
+    monkeypatch.setattr(app_state, gate, True)
+    s._start_locked = Mock()
+    s._resume_after_teardown(s._lifecycle_revision, None, None)
+    s._start_locked.assert_not_called()

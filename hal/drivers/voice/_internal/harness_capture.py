@@ -22,10 +22,12 @@ class Capture:
     finished: threading.Event = field(default_factory=threading.Event)
     cancelled: threading.Event = field(default_factory=threading.Event)
     claimed: bool = False
+    reservation: object = None
 
 
 class HarnessCapture:
-    def __init__(self):
+    def __init__(self, target_matches=same_target):
+        self._target_matches = target_matches
         self._lock = threading.Lock()
         self._capture = None
 
@@ -34,11 +36,13 @@ class HarnessCapture:
         with self._lock:
             return self._capture is not None
 
-    def start(self, snapshot):
+    def start(self, snapshot, *, reservation=None):
         with self._lock:
-            if self._capture is not None or not same_target(snapshot, snapshot):
+            if self._capture is not None or not self._target_matches(snapshot, snapshot):
                 return False
-            self._capture = Capture(dict(snapshot))
+            self._capture = Capture(dict(snapshot), reservation=reservation)
+            if reservation is not None:
+                self._capture.cancelled = reservation.cancelled
             return True
 
     def finish(self):
@@ -59,7 +63,7 @@ class HarnessCapture:
             capture = self._capture
             if capture is None:
                 return None
-            if not same_target(capture.snapshot, snapshot):
+            if not self._target_matches(capture.snapshot, snapshot):
                 capture.cancelled.set()
                 self._capture = None
                 return None

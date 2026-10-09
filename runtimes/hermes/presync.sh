@@ -2,18 +2,20 @@
 # runtime-hermes-presync: run by switch-runtime before hermes starts; owns config.yaml model wiring.
 # Static structure is re-asserted every run so it self-heals after `hermes setup --reset`.
 set -euo pipefail
-CONFIG_JSON="/root/config/config.json"
-HERMES_DIR="/root/.hermes"
+CONFIG_JSON="${CONFIG_JSON:-/root/config/config.json}"
+HERMES_DIR="${HERMES_DIR:-/root/.hermes}"
 ENV_FILE="$HERMES_DIR/.env"
 CONFIG_YAML="$HERMES_DIR/config.yaml"
 log() { echo "[hermes-presync] $*"; }
+
+LLM_CONFIG_MODE="$(jq -r '.llm_config_mode // empty' "$CONFIG_JSON" 2>/dev/null || true)"
 
 # ── 0. SKILLS ──
 # Restore OpenClaw-imported skills only when the dir is empty (factory reset wipes it; rerunning
 # `claw migrate --skill-conflict rename` every switch would pile up duplicates).
 HERMES_BIN="${HERMES_BIN:-/usr/local/bin/hermes}"
 IMPORTS_DIR="$HERMES_DIR/skills/openclaw-imports"
-if [ ! -d "$IMPORTS_DIR" ] || [ -z "$(ls -A "$IMPORTS_DIR" 2>/dev/null)" ]; then
+if [ "$LLM_CONFIG_MODE" != runtime ] && { [ ! -d "$IMPORTS_DIR" ] || [ -z "$(ls -A "$IMPORTS_DIR" 2>/dev/null)" ]; }; then
   if [ -x "$HERMES_BIN" ] && [ -d /root/.openclaw ]; then
     log "openclaw-imported skills missing — restoring via claw migrate"
     "$HERMES_BIN" claw migrate --preset full --overwrite --skill-conflict rename --yes --migrate-secrets \
@@ -28,6 +30,7 @@ fi
 
 touch "$CONFIG_YAML"
 
+if [ "$LLM_CONFIG_MODE" != runtime ]; then
 # `hermes setup --reset` leaves .model / .custom_providers as scalars; coerce before indexing.
 [ "$(yq '.model | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!map" ] || yq -i '.model = {}' "$CONFIG_YAML"
 [ "$(yq '.custom_providers | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!seq" ] || yq -i '.custom_providers = []' "$CONFIG_YAML"
@@ -58,6 +61,8 @@ yq -i '
   | .agent.image_input_mode = "auto"
 ' "$CONFIG_YAML"
 
+fi
+
 # ── 1b2. TERMINAL CWD ──
 # Hermes finds AGENTS.md only by walking up from an absolute configured cwd; `.` never resolves.
 log "ensure config.yaml terminal.cwd (makes AGENTS.md discoverable)"
@@ -72,6 +77,7 @@ yq -i '.approvals.mode = "off" | .approvals.mode style="double"' "$CONFIG_YAML"
 
 # ── 2. DYNAMIC (config.json wins) ──
 # "Auto-AI" is a campaign-api alias; a custom base_url must use the operator's llm_model instead.
+if [ "$LLM_CONFIG_MODE" != runtime ]; then
 LLM_BASE_URL="$(jq -r '.llm_base_url // empty' "$CONFIG_JSON" 2>/dev/null || true)"
 LLM_MODEL="$(jq -r '.llm_model // empty' "$CONFIG_JSON" 2>/dev/null || true)"
 
@@ -83,6 +89,10 @@ case "$LLM_BASE_URL" in
     # 1h TTL outlives typical 10-20 min gaps between voice turns (Hermes accepts only "5m" | "1h").
     yq -i '.prompt_caching.cache_ttl = "1h"' "$CONFIG_YAML"
     log "prompt_caching.cache_ttl = 1h"
+    # campaign-api reports no context window, so without this Hermes probes /models + /api/show
+    # (~0.8s on the network) at the start of EVERY turn, then falls back to 256K anyway.
+    yq -i '.custom_providers[0].models["Auto-AI"].context_length = 256000' "$CONFIG_YAML"
+    log "custom_providers[0].models.Auto-AI.context_length = 256000 (skips per-turn probe)"
     ;;
   *)
     if [ -n "$LLM_MODEL" ]; then
@@ -94,9 +104,16 @@ case "$LLM_BASE_URL" in
     ;;
 esac
 
+# Explicit OS ownership must restore the selected model even on the campaign endpoint.
+if [ "$LLM_CONFIG_MODE" = os ] && [ -n "$LLM_MODEL" ]; then
+  MODEL="$LLM_MODEL" yq -i '.model.default = strenv(MODEL)' "$CONFIG_YAML"
+fi
+
 if [ -n "$LLM_BASE_URL" ]; then
   yq -i ".custom_providers[0].base_url = \"$LLM_BASE_URL\"" "$CONFIG_YAML"
   log "custom_providers[0].base_url = $LLM_BASE_URL"
+fi
+
 fi
 
 # Upsert each non-empty config.json field into .env; other vars are left untouched.
@@ -110,7 +127,9 @@ sync_env() {
   log "${var} synced"
 }
 
-sync_env llm_api_key        AUTONOMOUS_API_KEY
+if [ "$LLM_CONFIG_MODE" != runtime ]; then
+  sync_env llm_api_key AUTONOMOUS_API_KEY
+fi
 sync_env telegram_bot_token TELEGRAM_BOT_TOKEN
 sync_env telegram_user_id   TELEGRAM_ALLOWED_USERS
 sync_env slack_bot_token    SLACK_BOT_TOKEN

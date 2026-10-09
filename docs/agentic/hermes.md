@@ -679,6 +679,12 @@ during install) and does three things, in order:
      ignores the field the cache silently stays at 5m, so the setting is harmless
      where unsupported. The 1h tier costs 2x input on the cache write (vs 1.25x
      for 5m); reads are 0.1x either way.
+   - `.custom_providers[0].models.Auto-AI.context_length = 256000` — same
+     proxy-only scope. campaign-api's `/models` carries no context window, so
+     without an explicit value Hermes probes `/models` and Ollama `/api/show`
+     (~0.4s each from the lamp) **before every turn**, logs `Could not detect
+     context length … (probe-down)` and falls back to 256K anyway. Pinning the
+     same 256K skips both round trips without changing compression thresholds.
    - `.auxiliary.vision` (the whole node is **overwritten**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — the image-understanding model, routed through the same autonomous provider.
@@ -1161,6 +1167,25 @@ immediately. A timed-out worker may finish its request in the background, but
 its late result cannot inject skill content. HTTP 429 follows the same fallback
 and 30-second cooldown; no provider error body or `Retry-After` diagnostics are
 added by preloading.
+
+Machine event turns reuse the decision for their kind. When the message starts
+with a lowercase header such as `[sensing:sound]` or `[environment:update]`
+(anything except `[user]`), the first valid decision (preload or abstention) is
+memoized under that header plus the current eligible skill set; later turns of
+that kind skip the proxy request, still recheck and natively load the skill,
+and log `cached=1` without `request_ms`. A catalog change or a plugin restart
+clears the reuse; errors and timeouts are never memoized; the memo holds at most
+64 entries and is cleared when full. Typed user text always asks the proxy. Rationale: on lamp-52e6 (2026-10-06..09)
+every valid decision per event kind was identical (`sensing:sound`, `environment:update`
+and `activity` always preloaded the same skill; `sensing:presence.*` enter/away always
+abstained) while each request blocked the turn for ~1.5 s.
+
+Voice turns (`[via:voice]` anywhere in the message) skip the decision and log
+`outcome=skipped reason=voice_turn`. On lamp-52e6 the plugin blocked every voice
+turn for a median 1.47 s (n=300) while a preload happened on only ~11% of them and
+spared at most one `skill_view` round (~2.5 s). A same-binary A/B (11 injected voice
+turns each) cut no-tool replies from 3.4-7.0 s to 2.2-2.6 s and added no
+`skill_view` rounds.
 
 Structured logs distinguish accepted selections from valid abstentions and
 failures instead of grouping them as `deferred`:

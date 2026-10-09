@@ -3,6 +3,7 @@ import { getApiToken, withApiToken } from "@/lib/api";
 import { S } from "./styles";
 import { API } from "./types";
 import { StatusBadge } from "./components";
+import "./technical-panels.css";
 
 type LogSource = "hal" | "os-server" | "bootstrap" | "openclaw" | "openclaw-service" | "buddy";
 const LOG_SOURCES: { id: LogSource; label: string; color: string }[] = [
@@ -222,7 +223,7 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
     const tone = chipTone(lvl);
     return (
       <>
-        <span style={{ opacity: 0.35 }}>{ts}</span>
+        <span style={{ color: "var(--lm-text-dim)" }}>{ts}</span>
         {" "}
         <span
           style={{
@@ -240,18 +241,18 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
         >{lvl}</span>
         {" "}
         {msg}
-        {meta && <span style={{ opacity: 0.3 }}>{meta}</span>}
+        {meta && <span style={{ color: "var(--lm-text-dim)" }}>{meta}</span>}
       </>
     );
   };
 
   const btnStyle: React.CSSProperties = {
-    fontSize: 12, padding: "5px 10px", borderRadius: 6,
+    fontSize: 13, minHeight: 36, padding: "7px 10px", borderRadius: 6,
     background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
     color: "var(--lm-text-dim)", cursor: "pointer", fontWeight: 600, lineHeight: 1,
   };
   const selectStyle: React.CSSProperties = {
-    fontSize: 12, padding: "5px 8px", borderRadius: 6,
+    fontSize: 13, minHeight: 36, padding: "7px 8px", borderRadius: 6,
     background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
     color: "var(--lm-text)", cursor: "pointer",
   };
@@ -265,10 +266,11 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0, boxShadow: `0 0 6px ${color}` }} />
         <span style={{ ...S.cardLabel, marginBottom: 0, fontSize: 13 }}>{label}</span>
 
-        <button onClick={fetchLines} style={btnStyle} title="Refresh">↻</button>
+        <button onClick={fetchLines} style={btnStyle} title="Refresh" aria-label="Refresh logs">↻</button>
         <button
           onClick={() => setPaused((p) => !p)}
           title={paused ? "Resume live stream" : "Pause live stream"}
+          aria-label={paused ? "Resume live stream" : "Pause live stream"}
           style={{
             ...btnStyle,
             background: paused ? "var(--lm-amber-dim)" : "var(--lm-surface)",
@@ -289,6 +291,7 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
         <span className="lm-log-sep" />
 
         <select
+          aria-label="Minimum log level"
           value={level}
           onChange={(e) => { const v = e.target.value as LogLevel; setLevel(v); onFilterChange(source, filter, v); }}
           style={{
@@ -305,9 +308,11 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
           type="text"
           value={filter}
           onChange={(e) => { setFilter(e.target.value); onFilterChange(source, e.target.value, level); }}
-          placeholder="grep…"
+          aria-label="Search logs"
+          placeholder="Search logs…"
+          className="lm-log-search"
           style={{
-            fontSize: 12, padding: "5px 10px", borderRadius: 6, width: 150,
+            fontSize: 13, minHeight: 36, padding: "7px 10px", borderRadius: 6, width: 150,
             background: filter ? "var(--lm-amber-dim)" : "var(--lm-surface)",
             border: `1px solid ${filter ? "var(--lm-amber)" : "var(--lm-border)"}`,
             color: "var(--lm-text)", fontFamily: "monospace",
@@ -332,6 +337,7 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
             URL.revokeObjectURL(url);
           }}
           title="Download visible lines as .log"
+          aria-label="Download visible logs"
           style={btnStyle}
         >↓</button>
         <button onClick={() => setLines([])} style={btnStyle} title="Clear view">Clear</button>
@@ -360,7 +366,7 @@ function LogPanel({ source, label, color, initialFilter, initialLevel, onFilterC
           style={{
             height: "100%", overflowY: "auto", padding: "6px 0",
             fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-            fontSize: 11, lineHeight: 1.55,
+            fontSize: 13, lineHeight: 1.65,
             whiteSpace: "pre-wrap" as const,
             overflowWrap: "anywhere" as const,
           }}
@@ -464,16 +470,23 @@ export function LogsSection() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 0, height: "100%" }}>
-      <div style={{ display: "flex", gap: 4, padding: "0 0 8px 0", flexShrink: 0 }}>
+    <div className="lm-logs-panel" style={{ display: "flex", flexDirection: "column", gap: 0, height: "100%", minWidth: 0 }}>
+      <label className="lm-log-source-picker">
+        Log source
+        <select value={active} onChange={(event) => handleTabChange(event.target.value as LogSource)}>
+          {LOG_SOURCES.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
+        </select>
+      </label>
+      <div className="lm-log-source-tabs" style={{ display: "flex", gap: 4, padding: "0 0 8px 0", flexShrink: 0, flexWrap: "wrap" }}>
         {LOG_SOURCES.map((s) => (
           <button
             key={s.id}
             onClick={() => handleTabChange(s.id)}
+            aria-pressed={active === s.id}
             style={{
-              fontSize: 11, padding: "5px 14px", borderRadius: 6, cursor: "pointer",
+              fontSize: 13, minHeight: 36, padding: "7px 14px", borderRadius: 6, cursor: "pointer",
               border: active === s.id ? `1px solid ${s.color}` : "1px solid var(--lm-border)",
-              background: active === s.id ? `${s.color}22` : "var(--lm-surface)",
+              background: active === s.id ? `color-mix(in srgb, ${s.color} 14%, var(--lm-surface))` : "var(--lm-surface)",
               color: active === s.id ? s.color : "var(--lm-text-dim)",
               fontWeight: active === s.id ? 700 : 500,
               transition: "all 0.15s",

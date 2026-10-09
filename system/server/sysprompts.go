@@ -18,6 +18,10 @@ func wakeGreetingPrompt(agentRuntime, deviceType string, capabilities map[string
 		"\n" + domain.ViaMarker(domain.ViaSystem)
 
 	switch i18n.Lang() {
+	case i18n.LangJA:
+		return "[system] 目が覚めました。ユーザーに短く挨拶してください。" +
+			"デバイスのスキルは利用可能です。操作やデバイスに関する依頼には、該当するスキルの指示を使ってください。" +
+			"以前の会話の言語にかかわらず、日本語で返答してください。" + contextTags
 	case i18n.LangVI:
 		return "[system] Bạn vừa thức dậy. Chào hỏi chủ nhân ngắn gọn. " +
 			"Các skill của thiết bị đã sẵn sàng; với yêu cầu hành động hoặc liên quan đến thiết bị, hãy dùng hướng dẫn của skill phù hợp. " +

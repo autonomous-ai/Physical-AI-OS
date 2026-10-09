@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import "./technical-panels.css";
 
 interface SessionMeta {
   id: string;
@@ -54,10 +55,11 @@ export function CliSection() {
         ))}
         <button
           onClick={addTab}
+          aria-label="New shell"
           disabled={sessions.length >= MAX_TABS}
           title={sessions.length >= MAX_TABS ? `Max ${MAX_TABS} sessions` : "New shell"}
           style={{
-            fontSize: 12, padding: "4px 10px", borderRadius: 5,
+            fontSize: 16, minWidth: 40, minHeight: 40, padding: "8px 12px", borderRadius: 5,
             background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
             color: sessions.length >= MAX_TABS ? "var(--lm-text-muted)" : "var(--lm-amber)",
             cursor: sessions.length >= MAX_TABS ? "not-allowed" : "pointer",
@@ -65,7 +67,7 @@ export function CliSection() {
           }}
         >+</button>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 9.5, fontFamily: "monospace", color: "var(--lm-text-muted)" }}>
+        <span style={{ fontSize: 12, fontFamily: "monospace", color: "var(--lm-text-dim)" }}>
           Ctrl+C/Z · arrows · tab-complete
         </span>
       </div>
@@ -89,29 +91,9 @@ function TabPill({ name, active, onSelect, onClose }: {
   onClose: () => void;
 }) {
   return (
-    <div
-      onClick={onSelect}
-      style={{
-        display: "flex", alignItems: "center", gap: 6,
-        padding: "4px 4px 4px 10px", borderRadius: 5,
-        border: active ? "1px solid var(--lm-amber)" : "1px solid var(--lm-border)",
-        background: active ? "rgba(245,158,11,0.12)" : "var(--lm-surface)",
-        color: active ? "var(--lm-amber)" : "var(--lm-text-dim)",
-        cursor: "pointer", fontSize: 11, fontWeight: active ? 700 : 500,
-        userSelect: "none",
-      }}
-    >
-      <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{name}</span>
-      <button
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
-        title="Close session"
-        style={{
-          fontSize: 11, lineHeight: 1, padding: "1px 6px", borderRadius: 3,
-          background: "transparent", border: "none",
-          color: active ? "var(--lm-amber)" : "var(--lm-text-muted)",
-          cursor: "pointer",
-        }}
-      >×</button>
+    <div className="lm-cli-tab" data-active={active}>
+      <button type="button" onClick={onSelect} aria-pressed={active}>{name}</button>
+      <button type="button" onClick={onClose} aria-label={`Close ${name}`} title="Close session">×</button>
     </div>
   );
 }
@@ -123,6 +105,7 @@ function TerminalSession({ visible }: { visible: boolean }) {
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
+  const [connectionAttempt, setConnectionAttempt] = useState(0);
 
   const refit = useCallback(() => {
     const f = fitRef.current;
@@ -201,13 +184,18 @@ function TerminalSession({ visible }: { visible: boolean }) {
       window.removeEventListener("resize", onWinResize);
       ro.disconnect();
       dataDisposable.dispose();
+      // A retired socket must not change the status of a replacement session.
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
       try { ws.close(); } catch { /* Unmount teardown: close() throws on an already-closing socket, which is the state we want anyway. */ }
       term.dispose();
       termRef.current = null;
       wsRef.current = null;
       fitRef.current = null;
     };
-  }, [refit]);
+  }, [refit, connectionAttempt]);
 
   // xterm mis-measures inside display:none, so re-fit when visible.
   useEffect(() => {
@@ -249,6 +237,25 @@ function TerminalSession({ visible }: { visible: boolean }) {
           }} />
           {status.toUpperCase()}
         </span>
+        {status === "closed" && (
+          <button type="button" className="lm-cli-key" onClick={() => {
+            setStatus("connecting");
+            setConnectionAttempt((attempt) => attempt + 1);
+          }}>Reconnect</button>
+        )}
+      </div>
+      <div className="lm-cli-mobile-keys" aria-label="Terminal keys">
+        {[
+          ["Ctrl+C", "\x03"], ["Tab", "\t"], ["Esc", "\x1b"],
+          ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"],
+        ].map(([label, sequence]) => (
+          <button key={label} type="button" className="lm-cli-key" disabled={status !== "open"}
+            aria-label={label === "↑" ? "Arrow up" : label === "↓" ? "Arrow down" : label === "←" ? "Arrow left" : label === "→" ? "Arrow right" : label}
+            onClick={() => {
+              if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(sequence);
+              termRef.current?.focus();
+            }}>{label}</button>
+        ))}
       </div>
       <div
         ref={hostRef}

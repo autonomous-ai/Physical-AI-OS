@@ -148,6 +148,8 @@ class AnimationService:
         self._tracking_wedge = TrackingWedgeWatchdog()
 
         self._idle_settled = False
+        # Gaze may sample quiet idle before its first full cycle completes.
+        self._idle_playback_started_at = 0.0
 
         # Overload cut-off (gear protection); None leaves it off. on_overload(joint,
         # load) runs after the torque is cut, for what this service cannot reach
@@ -404,6 +406,7 @@ class AnimationService:
         """Start playing a recording with interpolation from current state"""
         self._begin_motion()
         self._idle_settled = False
+        self._idle_playback_started_at = 0.0
         self._holding_logged = False
         self._hold_logged = False
         if not self.robot:
@@ -535,6 +538,8 @@ class AnimationService:
                 action = self._current_actions[self._current_frame_index]
                 with self.bus_lock:
                     self.robot.send_action(action)
+                if self._current_recording == self.idle_recording and not self._idle_playback_started_at:
+                    self._idle_playback_started_at = time.monotonic()
                 self._current_state = action.copy()
                 self._current_frame_index += 1
             else:
@@ -570,6 +575,7 @@ class AnimationService:
                     next_actions = self._load_recording(next_rec)
                     if next_actions is not None and len(next_actions) > 0:
                         self._current_recording = next_rec
+                        self._idle_playback_started_at = 0.0
                         self._current_actions = next_actions
                         self._current_frame_index = 0
                         if self._current_state is not None:

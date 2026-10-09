@@ -2,6 +2,7 @@
 package i18n
 
 import (
+	"strings"
 	"sync/atomic"
 
 	"go.autonomous.ai/os/system/server/config"
@@ -10,6 +11,7 @@ import (
 // BCP-47 language codes; LangZh/LangZhHans/LangZhHant normalise to LangZhCN/LangZhTW.
 const (
 	LangEN     = "en"
+	LangJA     = "ja"
 	LangVI     = "vi"
 	LangZhCN   = "zh-CN"
 	LangZhTW   = "zh-TW"
@@ -32,7 +34,7 @@ func Lang() string {
 	if cfg == nil {
 		return ""
 	}
-	return cfg.STTLanguage
+	return NormalizeLang(cfg.STTLanguage)
 }
 
 // LangContextTag returns "\n[context: current_language=X]" when configured, else "".
@@ -41,4 +43,13 @@ func LangContextTag() string {
 		return "\n[context: current_language=" + l + "]"
 	}
 	return ""
+}
+
+// NormalizeLang maps Japanese regional codes to the shared Japanese phrase pools.
+func NormalizeLang(lang string) string {
+	normalized := strings.ToLower(strings.TrimSpace(lang))
+	if normalized == "ja" || strings.HasPrefix(normalized, "ja-") || strings.HasPrefix(normalized, "ja_") {
+		return LangJA
+	}
+	return lang
 }

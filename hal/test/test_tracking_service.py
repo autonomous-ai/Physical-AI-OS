@@ -133,3 +133,14 @@ def test_a_tracking_session_leaves_a_scene_hold_in_place(monkeypatch):
     assert hold.owners(animation) == {"scene"}
     # Idle would play once and then freeze at its last frame under the scene's hold.
     assert animation.dispatched == []
+
+
+def test_a_per_call_duration_shortens_but_never_extends_the_cap():
+    """A greeting asks for a short look; nobody may ask for more than the cap."""
+    svc = TrackerService()
+    svc.start(target_label="face", max_duration_s=3)
+    assert svc._max_duration_s == 3
+    svc.start(target_label="face", max_duration_s=C.MAX_TRACK_DURATION_S * 10)
+    assert svc._max_duration_s == C.MAX_TRACK_DURATION_S
+    svc.start(target_label="face")
+    assert svc._max_duration_s == C.MAX_TRACK_DURATION_S

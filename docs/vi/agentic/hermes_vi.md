@@ -655,6 +655,12 @@ làm 3 việc theo thứ tự:
      mọi cache marker; gateway bỏ qua trường này thì cache âm thầm giữ 5m, nên
      thiết lập vô hại ở nơi chưa hỗ trợ. Mức 1h tính 2x giá input khi ghi cache
      (5m là 1.25x); đọc đều 0.1x.
+   - `.custom_providers[0].models.Auto-AI.context_length = 256000` — cùng điều
+     kiện chỉ-khi-ở-proxy. `/models` của campaign-api không có context window, nên
+     thiếu giá trị tường minh thì Hermes dò `/models` và Ollama `/api/show` (~0.4s
+     mỗi cái từ đèn) **trước mỗi lượt**, ghi log `Could not detect context length …
+     (probe-down)` rồi vẫn rơi về 256K. Ghim đúng 256K bỏ được cả hai round trip mà
+     không đổi ngưỡng compression.
    - `.auxiliary.vision` (**ghi đè trọn node**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — model hiểu ảnh, định tuyến qua cùng custom provider autonomous.
@@ -1154,6 +1160,25 @@ có một worker; đang bận thì bỏ qua ngay. Worker timeout có thể hoàn
 ở background nhưng kết quả muộn không thể chèn nội dung skill. HTTP 429 vẫn
 fallback và cooldown 30 giây như các lỗi khác; thay đổi nạp trước không thêm
 log nội dung lỗi provider hay chẩn đoán `Retry-After`.
+
+Lượt sự kiện máy dùng lại quyết định theo loại sự kiện. Khi tin nhắn bắt đầu bằng
+header chữ thường như `[sensing:sound]` hay `[environment:update]` (mọi header trừ
+`[user]`), quyết định hợp lệ đầu tiên (preload hoặc abstain) được ghi nhớ theo header
+đó cộng tập skill đủ điều kiện hiện tại; các lượt sau cùng loại bỏ qua request proxy,
+vẫn kiểm tra lại và nạp skill qua API gốc, và log `cached=1` không có `request_ms`.
+Catalog đổi hoặc plugin khởi động lại sẽ xoá phần dùng lại; lỗi và timeout không
+bao giờ được ghi nhớ; bộ nhớ tối đa 64 mục và được xoá khi đầy. Văn bản người dùng gõ
+luôn hỏi proxy. Lý do: trên lamp-52e6
+(2026-10-06..09) mọi quyết định hợp lệ cho cùng loại sự kiện đều giống nhau
+(`sensing:sound`, `environment:update` và `activity` luôn preload cùng một skill;
+`sensing:presence.*` enter/away luôn abstain) trong khi mỗi request chặn lượt ~1,5 giây.
+
+Lượt giọng nói (có `[via:voice]` trong tin nhắn) bỏ qua quyết định và log
+`outcome=skipped reason=voice_turn`. Trên lamp-52e6 plugin chặn mọi lượt giọng nói
+trung vị 1,47 giây (n=300) trong khi chỉ ~11% lượt được preload và mỗi lần preload
+chỉ tiết kiệm tối đa một vòng `skill_view` (~2,5 giây). A/B cùng binary (11 lượt giọng
+nói mỗi bên) giảm câu trả lời không dùng tool từ 3,4-7,0 giây xuống 2,2-2,6 giây và
+không làm phát sinh thêm vòng `skill_view`.
 
 Log có cấu trúc phân biệt lựa chọn được chấp nhận, quyết định hợp lệ nhưng từ chối chọn,
 và lỗi, thay vì gộp chung thành `deferred`:

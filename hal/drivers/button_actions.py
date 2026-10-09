@@ -9,6 +9,7 @@ import time
 import requests
 
 import hal.app_state as state
+from hal import config
 from hal.i18n import (
     HEAD_PAT_PHRASES_BY_LANG,
     MIC_MUTED_PHRASES_BY_LANG,
@@ -19,7 +20,7 @@ from hal.i18n import (
     PHRASE_SHUTDOWN,
     PHRASES_BY_LANG,
 )
-from hal.presets import DEFAULT_LANG
+from hal.presets import DEFAULT_LANG, normalize_language
 from hal.drivers.button_gestures import (
     DOUBLE_CLICK_WINDOW,
     FACTORY_RESET_DURATION,
@@ -65,7 +66,7 @@ def _notify_head_pat(spoken: str):
         pass
 
 
-def _cancel_agent_speech(source: str):
+def _cancel_agent_speech(source: str, *, before_ms=None):
     """Tell the OS server to stop speaking for every turn currently in flight.
 
     Fire-and-forget on its own thread: the click's felt latency is the whole point of
@@ -82,7 +83,9 @@ def _cancel_agent_speech(source: str):
 
     def _post():
         try:
-            requests.post(OS_SPEECH_CANCEL_URL, json={}, timeout=1.0)
+            requests.post(OS_SPEECH_CANCEL_URL,
+                          json={} if before_ms is None else {"before_ms": before_ms},
+                          timeout=1.0)
         except Exception as e:
             logger.warning("%s speech-cancel call failed: %s", source, e)
 
@@ -92,7 +95,7 @@ def _cancel_agent_speech(source: str):
 def _current_lang() -> str:
     try:
         from hal.config import _os_cfg_get
-        return (_os_cfg_get("stt_language") or "").strip()
+        return normalize_language(_os_cfg_get("stt_language"))
     except Exception:
         return ""
 
@@ -210,19 +213,23 @@ def play_pet_chime(source: str = "TTP223"):
 
 
 def announce_listening_cue(source: str = "button"):
-    """Fire the listening-cue TTS off-thread."""
+    """Keep gesture callers intact while the spoken listening cue is disabled."""
     # Same HW kill-switch guard as single_click_action. Guarding only
     # single_click_action leaves the GPIO-button path leaky.
     if state._hw_mic_switch_muted is True:
         logger.info("%s listening cue skipped -- HW mic switch is off", source)
         return
-    if _tts_available():
-        threading.Thread(
-            target=_announce_listening,
-            args=(getattr(state.tts_service, "input_capture_state", (False, 0)),),
-            daemon=True,
-            name=f"{source}-single-click-tts",
-        ).start()
+    # Tap/wake latency experiment: the spoken cue sets TTS.speaking, which makes
+    # VAD discard the user's first words. Keep the original call for rollback;
+    # the existing short ack chime does not set TTS.speaking.
+    # if _tts_available():
+    #     threading.Thread(
+    #         target=_announce_listening,
+    #         args=(getattr(state.tts_service, "input_capture_state", (False, 0)),),
+    #         daemon=True,
+    #         name=f"{source}-single-click-tts",
+    #     ).start()
+    logger.info("%s listening TTS disabled -- keeping the short tap chime", source)
 
 
 def _stop_active_tracking(source: str):
@@ -423,7 +430,7 @@ def sleep_action(source: str = "button"):
     logger.info("%s sleep hold -- announcing sleepy emotion", source)
     if _tts_available():
         state.tts_service.speak_cached(_phrase(PHRASE_SLEEP))
-        time.sleep(5)
+        time.sleep(config.SLEEP_ANNOUNCEMENT_DELAY_S)
 
     try:
         from hal.models import EmotionRequest
@@ -507,6 +514,8 @@ def button_hold_release_action(held_s, feedback, *, behavior="standard", hold_s=
 def _factory_reset_phrase() -> str:
     """Inline i18n until PHRASE_FACTORY_RESET lands in i18n.py."""
     lang = _current_lang()
+    if lang.startswith("ja"):
+        return "工場出荷時の設定に戻します。再起動します。"
     if lang.startswith("vi"):
         return "Đang khôi phục cài đặt gốc. Đang khởi động lại."
     if lang.startswith("zh"):

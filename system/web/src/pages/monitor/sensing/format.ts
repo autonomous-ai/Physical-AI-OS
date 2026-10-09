@@ -10,6 +10,7 @@ export function fmtAgo(seconds: number | null | undefined): string {
 // Maps a presence state string to a color so users can scan at a glance.
 export function presenceColor(state: string): string {
   switch (state) {
+    case "present":
     case "active":   return "var(--lm-green)";
     case "idle":     return "var(--lm-amber)";
     case "away":     return "var(--lm-red)";

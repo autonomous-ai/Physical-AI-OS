@@ -1,5 +1,46 @@
 # OS Server API — Tài Liệu
 
+Opening chỉ là một âm xác nhận ngắn: tiếng Anh "Uhm.", tiếng Việt "Ừm.",
+tiếng Nhật "うん。", tiếng Trung giản thể/phồn thể "嗯。". Lượt voice thông thường
+của agent chính gọi phát ngay trước khi chuyển lời người dùng; lượt delegate bỏ
+qua opening. Continuation chỉ dùng một âm ngắn (tiếng Anh "Hmm...", tiếng Việt
+"Ừm..."), chờ 3,5 giây từ lúc
+agent bắt đầu lượt (từ tool đầu tiên với lượt delegate). Khi tool kết thúc,
+lịch phát lại cộng thêm phần cooldown 2,5 giây còn lại. Timer này không làm
+trễ opening.
+Mỗi lượt có tối đa một continuation tự động; các tool sau đó không phát thêm.
+Đã xoá bộ câu opening và continuation cũ. Filler chờ tự động không chọn câu theo tool. Cue realtime/tool được gọi riêng không đổi.
+
+Với follow-up Automatic của lamp Standard và Pro, HAL có thể gửi metadata sensing tùy
+chọn `suppress_auto_fillers: true`. OS bỏ opening và continuation filler tự động
+được lên lịch cho run đó, kể cả khi resume sau delegate; trạng thái này được giữ
+với giới hạn 4096 run. Câu trả lời thực, cue tool tường minh và thực thi tool
+không đổi. HAL chốt chính sách theo wake window lúc bắt đầu thu, không dựa vào
+final transcript có wake phrase hay không. Xem
+[filler chỉ ở lượt mở hội thoại](realtime-voice_vi.md#filler-tự-động-chỉ-ở-lượt-mở-hội-thoại-trên-lamp-standard-và-pro).
+
+Pool tool nội bộ chỉ giữ một câu ngắn cho mỗi ngôn ngữ. Câu tìm/đọc/tạo nội dung
+chỉ mô tả hành động chung của các alias; các pool rộng hoặc gom nhiều thao tác
+(`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,
+`pdf`, `canvas`, `nodes`, `subagents`) dùng âm suy nghĩ trung tính, không đoán hành
+động hay khẳng định thành công. Video dùng "Đang xử lý video" vì pool còn nhận
+thao tác chỉnh sửa. Giữ nguyên câu camera `look_*` và demo chuyển động `demo_*`.
+Sửa nội dung này không bật lại việc tự chọn câu theo tool và không đổi lịch filler.
+
+`GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật). Progress có thể chứa `activity_at` tùy chọn (giây Unix) cho hoạt động cài dependency HAL nhận diện được; snapshot cũ không có trường này vẫn hợp lệ.
+
+## Hỗ trợ tiếng Nhật
+
+`stt_language: "ja"` chọn tiếng Nhật. Các biến thể vùng như `ja-JP` và `ja_JP`
+dùng chung bộ phrase tiếng Nhật. OS-server có thông báo hệ thống, lời chào,
+câu hỏi tên thiết bị, chitchat và câu đệm tiếng Nhật; agent nhận context ngôn ngữ
+Nhật. Giọng ElevenLabs mặc định là `Shizuka`, với sáu giọng Nhật bản ngữ trong
+danh mục voice chung. Chitchat tiếng Nhật chỉ khớp toàn câu sau khi chuẩn hóa
+dấu câu và wake word; câu hỏi như `何している？` tiếp tục được gửi cho agent. Khi HAL
+không trả được danh sách voice, fallback ElevenLabs vẫn lọc theo ngôn ngữ:
+English dùng Rachel, Japanese dùng Shizuka. Ngôn ngữ trống trả đủ 42 voice;
+ngôn ngữ không hỗ trợ dùng nhóm English. Xem [chọn giọng tiếng Nhật](realtime-voice_vi.md#tiếng-nhật-và-giọng-elevenlabs).
+
 Ambient LED gọi HAL `/led/restore` sau khoảng yên lặng. OS không chọn màu fallback hay hiệu ứng thở; mỗi device khai báo `ambient_led.resting` trong `presets.json`. HAL giữ trạng thái user tắt/đặt màu và quyền sở hữu của overlay đang hoạt động.
 
 > OS Server (Go, Gin framework) chạy trên port 5000.
@@ -285,7 +326,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` bị drop khi agent turn gần nhất mà handler này tạo (bất kể type) cách đây chưa tới `sensing_turn_floor_s` giây (key config, mặc định `120`, `0` = tắt; guard mode bypass). Một floor xuyên-type đè trên các gate per-type độc lập của HAL — một loạt event khác type chỉ tốn tối đa 1 agent turn mỗi window. Event bị drop hiện thành `sensing_drop` (reason `ambient_floor`) trong Flow Monitor.
 3. Không match → forward OpenClaw qua WebSocket `chat.send`
 4. Nếu event có `images` → gọi `SendChatMessageWithImages` → gửi mọi ảnh đính kèm cùng text cho AI vision phân tích. Là một DANH SÁCH chứ không phải một trường đơn: client chat có thể đính nhiều ảnh cùng lúc và mọi wire format phía sau gateway vốn đã mang `attachments[]`; event camera thì chỉ gửi một phần tử. Với type chat (`web_chat` / `mqtt_chat`), mỗi ảnh được lưu vào `/tmp/web-chat-<ms>-<i>.jpg` (có index nên các ảnh trong CÙNG một lượt không đè tên nhau) và gắn tag `[image: <path>]` để agent reference (vd: face enrollment). Khi model chính không đọc được ảnh, describe-first gate chạy một lần CHO MỖI ảnh, **song song** (`safego`), và mô tả được đánh số `(image N of M)`. Song song ở đây không phải để tối ưu: gate chạy ngay trong HTTP handler nên POST của client không trả về cho tới khi describe xong hết — một lần describe đo được 8-38 giây, nên 2 ảnh chạy tuần tự làm web chat im lặng ~53 giây, đủ lâu để người dùng reload trang (mà reload thì huỷ request và mất luôn lượt đó). Chạy song song biến thời gian chờ thành ảnh CHẬM NHẤT thay vì tổng của chúng.
-5. Describe-first gate ở trên CHỈ phủ ảnh đi vào lượt từ BÊN NGOÀI (đính kèm chat/Telegram, look-frame do realtime voice bàn giao). Ảnh agent tự chụp GIỮA LƯỢT bằng `/camera/snapshot` không đi qua gate đó — tool shell chỉ trả về `{"path": ...}`, model chính text-only không nhìn thấy gì. Cho đường này, skill `camera` gọi `POST /api/vision/look` (loopback-only, `system/server/vision.go`) thay vì gọi thẳng HAL: os-server tự chụp (`hal.Snapshot`, 768px/q75 chốt ở server) rồi trả `{"path": ..., "description": ...}`. Nhánh quyết định model có nhìn được ảnh hay không nằm Ở ĐÂY chứ không nằm trong skill — khi `vision.ModelSupportsVision` báo model chính tự đọc được ảnh thì BỎ QUA describe hoàn toàn (không gọi vision model, không mất 8-38 giây), chỉ trả `path` để agent tự mở. Describe lỗi thì trả 502 để agent nói thẳng là không nhìn được thay vì đoán bừa
+5. Describe-first gate ở trên CHỈ phủ ảnh đi vào lượt từ BÊN NGOÀI (đính kèm chat/Telegram, look-frame do realtime voice bàn giao). Ảnh agent tự chụp GIỮA LƯỢT bằng `/camera/snapshot` không đi qua gate đó — tool shell chỉ trả về `{"path": ...}`, model chính text-only không nhìn thấy gì. Cho đường này, skill `camera` gọi `POST /api/vision/look` (loopback-only, `system/server/vision.go`) thay vì gọi thẳng HAL: os-server tự chụp (`hal.Snapshot`, 768px/q75 chốt ở server) rồi trả `{"path": ..., "description": ...}`. Description là câu trả lời 1-3 câu cho `question`, vision model chạy với thinking tắt (~3 giây trên lamp thay vì 15-40 giây). `"read_text": true` (skill chỉ đặt khi người dùng nhờ đọc chữ, nhãn, biển hoặc hãng) chụp frame 1280px và để thinking bật: chậm hơn, nhưng model nói chữ nhỏ không đọc được thay vì bịa ra. Look chỉ thử một lần để agent nói là không nhìn được thay vì im lặng 80 giây: 30 giây cho look thường, 45 giây cho look `read_text` (describe ảnh đính kèm vẫn 45 + 35 giây). Khi gateway chậm thì thử lại cũng chậm y như lần đầu. Nhánh quyết định model có nhìn được ảnh hay không nằm Ở ĐÂY chứ không nằm trong skill — khi `vision.ModelSupportsVision` báo model chính tự đọc được ảnh thì BỎ QUA describe hoàn toàn (không gọi vision model), chỉ trả `path` để agent tự mở. Describe lỗi thì trả 502 để agent nói thẳng là không nhìn được thay vì đoán bừa; thông báo lỗi mở đầu bằng lời dặn nói vậy rồi dừng, không chụp lại hay gọi `vision_analyze` (cùng vision model). Chỉ dặn trong skill camera thì agent vẫn chụp lại rồi gọi `vision_analyze` (112,8 giây tới câu trả lời trên lamp-52e6 khi ép lỗi, 11 giây khi lời dặn nằm trong thông báo lỗi). Ở lượt voice, endpoint còn nói hai câu cue đã cache qua `FillerManager.SayInVoiceRun` (pool `look_capturing_main` trước khi chụp — ảnh chờ tối đa 2,5 giây cho câu nói xong — và `look_analyzing` sau khi chụp, ví dụ "Để mình nhìn thử." / "Chụp xong rồi, đợi mình chút nha."); mỗi cue đẩy lùi filler chờ của lượt đó thêm một cooldown và không tính vào `MaxFillersPerTurn`. Lượt không phải voice (Telegram, web chat, cron) thì im lặng. Tool `look` của realtime chụp bên trong HAL nên không bị ảnh hưởng.
 6. Run chat (`web_chat` / `mqtt_chat`) được mark qua `MarkWebChatRun(runID)` để SSE handler suppress TTS lúc lifecycle end — reply chỉ hiện trong UI chat (web SSE, hoặc stream MQTT `chat.event`).
 
 ### Điều hướng đăng ký giọng chưa nhận diện
@@ -707,8 +748,8 @@ không còn đường nào quay lại bộ credential nó được bán kèm.
 `autonomous_defaults` là một object ở **cấp ngoài cùng** của `config.json`, giữ
 `base_url` / `api_key` / `model`. Nó được ghi **đúng một lần**, bởi
 `captureAutonomousDefaults`, ngay trước lần lưu đầu tiên có mang theo bất kỳ
-credential nào — LLM, TTS, STT hay key/URL của realtime — và không bao giờ ghi
-lại. Chụp lần hai là lưu chính key của người dùng dưới tên Autonomous và mất
+credential nào — LLM, TTS, STT hay key/URL của realtime — hoặc có lựa chọn rõ
+bên quản lý cấu hình LLM, và không bao giờ ghi lại. Chụp lần hai là lưu chính key của người dùng dưới tên Autonomous và mất
 hẳn bộ thật, đúng cái hỏng mà nó sinh ra để chặn. Lần lưu không đụng credential
 nào (wifi, đổi tên, channel) thì không kích hoạt, và config không có gì để giữ
 thì bỏ qua, để một bộ rỗng không bị nhầm là mặc định hợp lệ. Chỉ factory reset
@@ -1088,6 +1129,17 @@ Code suy luận cốt lõi nằm trong `system/intent/jev/` (`client`, `resolver
 `catalog`). `system/intent/semantic.go` nối phần này với rule local và thực thi,
 tách quyết định của model khỏi tác động lên HAL.
 
+Bộ lọc từ khoá local (`MayBeDeviceCommand` trong `catalog.go`) chạy trước request
+Jev. Text chỉ gồm ký tự ASCII và không có từ nào bắt đầu bằng từ vựng của catalog
+(light, lamp, bright, dim, volume, loud, tên màu, tên scene/mode, music, stop,
+speak, time, follow, track, camera, ...) sẽ không gọi Jev mà đi thẳng xuống main
+runtime, tiết kiệm ~1-2 s quyết định vốn chỉ để từ chối. Log ghi
+`intent Jev decision outcome=skipped reason=no_device_keyword`. Text có ký tự
+non-ASCII (ví dụ tiếng Việt) luôn đi qua Jev. Câu diễn đạt không dùng từ nào trong
+danh sách vẫn được main runtime xử lý. Khi thêm intent vào catalog, bổ sung
+`jevKeywordStems`; `TestMayBeDeviceCommandKeepsLiveCorpus` fail nếu một ví dụ
+dương trong live corpus bị lọc mất. Chọn session Harness không dùng bộ lọc này.
+
 Ngân sách quyết định mặc định **3.000 ms**, giới hạn **3.000 ms** (giá trị không
 dương dùng mặc định). Mỗi quyết định gọi một request, không retry. Nếu đang có
 quyết định khác thì bỏ qua ngay, không xếp hàng. Lỗi, timeout, status non-2xx hoặc response sai
@@ -1392,7 +1444,7 @@ Chúng tốn token theo cách khác nhau, nên cũng bị chặn theo cách khá
 
 | | Nằm trong system prompt? | Bị tính token | Trần |
 |---|---|---|---|
-| `USER.md` | **có** — là bootstrap file | **mỗi lượt** | 12000 ký tự (`bootstrapMaxChars`), vượt thì cắt từ đuôi |
+| `USER.md` | **có** — là bootstrap file | **mỗi lượt** | 24000 ký tự mỗi file (`bootstrapMaxChars`), đồng thời chịu ngân sách bootstrap tổng 48000 ký tự |
 | `KNOWLEDGE.md` | **không** — OpenClaw không biết file này | một lần mỗi session, khi agent đọc | không có |
 
 `KNOWLEDGE.md` vốn không có trần nào: synthesis hằng ngày append thêm một block
@@ -1435,8 +1487,8 @@ không được phép âm thầm làm mất nó.
 |---|---|
 | Mỗi người một bullet dưới `## Users`, dạng `- **<label> (friend)** — call: …; notes: …` | `<label>` là enrollment label lấy từ `[context: current_user=…]`, đúng khoá mà reconcile của OS dùng. Phần `(friend)` là thứ phân biệt một con người với một field biểu mẫu — thiếu nó, `**Notes:** …` sẽ bị đọc thành người tên "Notes:" và bị xoá. |
 | Các đoạn `key: value` ngắn, không phải văn xuôi; `call:` đứng đầu | Các field của template là đơn nhất (một `**Name:**`, một `**Timezone:**`) nên không mô tả nổi hai người, nhưng lồng chúng theo từng người thì không sống sót qua file: `parseEntries` → `serialize` làm phẳng mọi bullet thành `- …`, nên field con thụt lề bị tách khỏi người của nó. Các đoạn giữ được *ý* của biểu mẫu — dữ kiện tách bạch, có nhãn — trong một entry prune được. Lần đầu để văn xuôi tự do đã cho ra một đoạn ~600 ký tự với cách xưng hô nằm lẫn ở câu thứ tư. |
-| Không bao giờ đoán `call:`, đại từ nhân xưng hay múi giờ | Agent chỉ thấy một face label và một voiceprint. Không thứ nào nói lên người ta muốn được gọi thế nào. Chỉ ghi khi họ đã tự nói; nếu chưa, bỏ hẳn đoạn đó. |
-| Mỗi entry dưới ~400 ký tự | `USER.md` bị tính token mỗi lượt, và vượt `bootstrapMaxChars` (12000) thì OpenClaw cắt bằng `text.slice(0, cutPoint)` — giữ đầu, **cắt đuôi** — mà `## Users` chính là phần đuôi. Profile phình to sẽ âm thầm mất đúng phần dữ liệu về người. `ReconcileUserProfiles` cảnh báo từ mốc 9000. |
+| Không bao giờ đoán `call:`, đại từ nhân xưng hay múi giờ | Agent chỉ thấy một face label và một voiceprint. Không thứ nào nói lên người ta muốn được gọi thế nào. Chỉ ghi khi họ đã tự nói; nếu chưa, bỏ hẳn đoạn đó. Danh xưng hay kính ngữ nghe được trong lượt nói (Mr, Ms, Miss, Mrs, anh, chị…) không được tính: nhận dạng giọng nói hay tự thêm vào (2026-10-05, green-lamp: "…is Lee" bị nghe thành "Miss Lee" và thành `call: Lee (Ms Lee)`). Ghi tên trần và không bao giờ suy ra giới tính; chỉ giữ danh xưng khi chính người đó yêu cầu rõ ràng. `face-enroll` áp dụng cùng quy tắc cho label và câu đọc lại. |
+| Mỗi entry dưới ~400 ký tự | `USER.md` bị tính token mỗi lượt, và vượt `bootstrapMaxChars` mỗi file (24000) hoặc ngân sách bootstrap tổng (48000), OpenClaw có thể cắt nội dung đưa vào prompt. Profile phình to có thể mất dữ liệu về người trong prompt. `ReconcileUserProfiles` cảnh báo từ mốc 9000. |
 | Người lạ không có entry | `## Users` khoá theo enrollment label; một khuôn mặt đi ngang không có label nào. Lưu lượng người qua bàn thì ghi ở `KNOWLEDGE.md`. |
 | Chỉ ghi điều quan sát được về **chính** người đó | Lỗi ban đầu là hai người bị gộp thành một profile (`Long/Leo`). Không bao giờ chuyển thói quen của người này sang người khác. |
 | Chỉ thêm và cập nhật — **không bao giờ xoá** | Vắng mặt không phải là rời đi. Retire một người là việc của OS (`ReconcileUserProfiles`, khoá theo enrollment), không phải của agent. |
@@ -1709,3 +1761,33 @@ Các endpoint nhận sự kiện (telemetry, mood, wellbeing, posture, music sug
 ### Xác thực thao tác thay đổi dữ liệu giọng nói
 
 `POST /api/sensing/filler` dùng gate admin hoặc loopback trực tiếp, giữ lời đệm realtime nội bộ của HAL và chặn gọi LAN chưa xác thực. `POST /api/voice/file/remove` yêu cầu admin kể cả loopback; cookie phiên đăng nhập hiện có của web vẫn hợp lệ. Thao tác xóa chặn traversal qua tên hồ sơ/file và symlink thoát thư mục bằng `os.Root`. Giữ hành vi xóa mẫu/embedding hợp lệ và dọn hồ sơ khi xóa WAV cuối.
+
+### Quyền quản lý cấu hình LLM
+
+`PUT /api/device/config` nhận `llm_config_mode: "os" | "runtime"`;
+`GET /api/device/config` trả về giá trị đã lưu. Thiếu trường hoặc chuỗi rỗng giữ
+hành vi cũ, gồm tự nhận diện auth của Codex/Claude Code. Chọn rõ `os` sẽ áp dụng
+lại provider của OS dù key, URL và model không đổi; gọi
+`POST /api/device/restore-defaults` với `section: "llm"` cũng chọn `os`.
+
+`runtime` để người dùng quản lý provider/model/auth LLM trong cả sáu runtime
+local. Gateway, workspace, skills và channel vẫn được đồng bộ. Credential OS đã
+lưu vẫn phục vụ voice/backend. Các trường LLM gửi lên bị bỏ qua khi đang chọn
+runtime tự quản lý. Gửi lại giá trị thinking không đổi không còn kích hoạt
+reconcile runtime khi lưu mục khác.
+
+Lựa chọn áp dụng chung khi đổi runtime; runtime đích cần login và chọn
+provider/model riêng. Migration credential được bỏ qua trong chế độ runtime và
+cập nhật mốc runtime hiện tại, tránh migration trễ khi quay về OS. Đổi chế độ áp
+dụng config và làm mới môi trường runtime đồng bộ; lỗi áp dụng được trả về sau
+khi đã lưu chế độ, cho phép gửi lại cùng lựa chọn để thử lại. Điều này không xác
+minh subscription còn hợp lệ hay model gọi thành công. Mở terminal mới sau khi
+đổi chế độ; shell đang mở vẫn giữ biến môi trường cũ.
+
+### Cách nhập giọng nói
+
+`GET /api/device/config` trả `voice_input_mode`: `automatic` (mặc định khi trường thiếu) hoặc `tap_to_talk`. `PUT /api/device/config` nhận trường tùy chọn cùng tên; chuỗi rỗng/giá trị khác bị từ chối trước khi thay đổi config. Bỏ qua trường nghĩa là giữ nguyên. `automatic` dùng cờ `wakeword` hiện có; `tap_to_talk` bỏ qua wake và giữ lại cờ đã lưu để chuyển về Tự động. MQTT `voice.input_mode` dùng chung logic lưu/apply. Đổi riêng mode gọi HAL `POST /voice/input-mode` với timeout 30 giây, không restart hai tiến trình. HAL hủy capture đang chờ và cấu hình lại voice worker/session, giữ privacy và sleep. Lỗi lưu/apply cho phép retry cùng giá trị. Request đổi thêm trường cần restart vẫn chỉ restart HAL một lần. Phản hồi cấu hình và BE ping báo mode đã cấu hình; lỗi apply vẫn trả lỗi thay vì báo thành công.
+
+`POST /api/device/voice-input-mode/toggle` không có body, đổi mode đã lưu nguyên tử dưới cùng khóa apply. Caller loopback không cần admin auth; caller remote cần auth. Thành công trả `{"status":1,"data":{"mode":"tap_to_talk"},"message":null}` (hoặc `automatic`) sau khi HAL áp dụng. Đây là thao tác gesture không idempotent: không tự retry khi timeout; gửi mode tường minh để retry trạng thái mong muốn.
+
+`POST /api/agent/speech/cancel` giữ hành vi cũ khi body rỗng (ngắt toàn bộ bằng thao tác vật lý). Body tùy chọn `{ "before_ms": <Unix milliseconds> }` chặn lời nói/filler của lượt cũ, không gọi HAL stop toàn bộ khi đến muộn và không hủy hành động phần cứng. HAL lấy mốc trên cùng device trước khi nhận bản ghi thay thế. Sensing của device có thể gửi `captured_at_ms` cùng snapshot Harness OFF; lượt voice-command/handled hợp lệ giữ thời điểm thu trong run ID duy nhất để dispatch đến muộn vẫn bị chặn đúng.

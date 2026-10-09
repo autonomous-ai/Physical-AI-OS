@@ -82,6 +82,7 @@ class SensingSender:
         interaction_id: str = "",
         harness_voice: dict | None = None,
         voice_turn_type: str = "",
+        suppress_auto_fillers: bool = False,
     ) -> "SendResult":
         """POST decorated message to os-server /api/sensing/event with retry."""
         if not skip_echo and self.is_echo(message):
@@ -96,6 +97,8 @@ class SensingSender:
                 logger.exception("[voice] presence activity update failed")
 
         payload = {"type": event_type, "message": message}
+        if suppress_auto_fillers:
+            payload["suppress_auto_fillers"] = True
         # Observational classification only; never replace the routing event.
         if voice_turn_type in ("voice", "voice_command", "voice_followup"):
             payload["voice_turn_type"] = voice_turn_type
@@ -104,6 +107,8 @@ class SensingSender:
                 "enabled": harness_voice["enabled"],
                 "generation": harness_voice["generation"],
             }
+        if harness_voice and not harness_voice.get("enabled") and harness_voice.get("capturedAtMs"):
+            payload["captured_at_ms"] = harness_voice["capturedAtMs"]
         if interaction_id:
             payload["interaction_id"] = interaction_id
         try:

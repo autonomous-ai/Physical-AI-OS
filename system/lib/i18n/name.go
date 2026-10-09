@@ -3,6 +3,8 @@ package i18n
 import (
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Device name placeholders: {name} (lowercase, matchers) and {Name} (title case, spoken text).
@@ -18,7 +20,8 @@ func SetDeviceName(name string) {
 	if n == "" {
 		return
 	}
-	disp := strings.ToUpper(n[:1]) + n[1:]
+	first, size := utf8.DecodeRuneInString(n)
+	disp := string(unicode.ToUpper(first)) + n[size:]
 	deviceNameMu.Lock()
 	deviceNameLower = n
 	deviceNameDisplay = disp

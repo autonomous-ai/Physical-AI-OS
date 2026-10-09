@@ -97,7 +97,7 @@ User says "Lamp, nhìn xem" / "look at me" / "camera on" → agent calls `[HW:/c
 
 ### 7. Telegram/web chat with visual context needed
 
-Agent needs snapshot (camera skill) → one shell call checks `GET /camera` first: `disabled` → the agent answers "camera is off" and stops (no auto-enable, no capture); `has_frame: false` → "camera is not working" and stops; otherwise `POST /api/vision/look` captures and describes. The check rides in the same tool call so it adds no model round.
+Agent needs snapshot (camera skill) → one shell call checks `GET /camera` first: `disabled` → the agent answers "camera is off" and stops (no auto-enable, no capture); `has_frame: false` → "camera is not working" and stops; otherwise `POST /api/vision/look` captures and answers the question (thinking off; `"read_text": true` only for reading text/labels/brands, which uses a 1280px frame and thinking). The check rides in the same tool call so it adds no model round. On a voice turn `/api/vision/look` says a short line before the photo ("Taking a look.") and another once it is taken ("Got it — give me a sec."), so the user knows when the picture was taken during the long describe wait.
 
 ## Manual Override
 

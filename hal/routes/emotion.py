@@ -114,6 +114,12 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
             "sleep" if state._sleeping else "wake", req.emotion, source
         )
     emotion_generation = state._begin_emotion(req.emotion)
+    # Close audio admission before servo/camera work can delay sleep.
+    if req.emotion == EMO_SLEEPY:
+        state._finalize_sleepy_peripherals(
+            mute_mic=preset.get("mic") == "off",
+            mute_speaker=preset.get("speaker") == "off",
+        )
     # Drop the thinking cue's claim so a restore never repaints thinking.
     if req.emotion != EMO_THINKING:
         state._thinking_cue_active = False
@@ -280,12 +286,6 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
                               req.emotion, held_by)
         else:
             state._auto_camera_on(f"emotion:{req.emotion}")
-
-    if req.emotion == EMO_SLEEPY:
-        state._finalize_sleepy_peripherals(
-            mute_mic=preset.get("mic") == "off",
-            mute_speaker=preset.get("speaker") == "off",
-        )
 
     return {
         "status": "ok",

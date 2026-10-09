@@ -1,5 +1,49 @@
 # OS Server API — Documentation
 
+Opening feedback is one short acknowledgment sound: English "Uhm.", Vietnamese
+"Ừm.", Japanese "うん。", and Simplified/Traditional Chinese "嗯。". Ordinary
+main-agent voice turns request it immediately before forwarding; delegated turns
+skip it. Continuation fillers use one short thinking sound (English "Hmm...",
+Vietnamese "Ừm...") and wait 3.5 seconds after turn start (after the first tool starts for delegated
+turns). Tool-end rearming adds any remaining 2.5-second cooldown to that delay.
+This timer does not delay opening feedback. Each turn permits at most one automatic continuation; later tool calls do not trigger more.
+The previous opening and continuation phrase pools have been removed. Automatic
+waiting fillers do not select tool-specific phrases. Explicit realtime/tool cues
+are unchanged.
+
+For Standard and Pro lamp Automatic follow-ups, HAL may send optional sensing metadata
+`suppress_auto_fillers: true`. OS skips opening feedback and scheduled automatic
+continuation fillers for that run, including delegated resumes; it retains this
+policy for a bounded 4096 runs. Actual replies, explicit tool cues and tool
+execution are unaffected. HAL sets the policy from wake-window state at capture
+start, not from whether the final transcript contains a wake phrase. See
+[opening-only automatic fillers](realtime-voice.md#opening-only-automatic-fillers-on-standard-and-pro-lamps).
+
+Named internal-tool pools use a single short cue per language. Search/read/media
+cues describe an action shared by their aliases; broad or mixed-action pools
+(`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,
+`pdf`, `canvas`, `nodes`, `subagents`) use a neutral thinking sound rather than
+claiming a specific action or success. Video cues say "Processing video" because
+the pool also covers editing. Camera `look_*` and movement-demo `demo_*` phrases
+are unchanged. These content changes do not re-enable automatic tool overrides
+or change filler scheduling.
+
+`GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots). Progress may include optional `activity_at` (Unix seconds) for recognized HAL dependency installation activity; older snapshots without it remain valid.
+
+## Japanese language support
+
+`stt_language: "ja"` selects Japanese. Japanese regional aliases such as `ja-JP`
+and `ja_JP` resolve to the same localized phrase pools. OS-server includes Japanese
+system notices, greetings, device-name prompts, chitchat and filler phrases; the
+agent receives Japanese language context. The ElevenLabs default for Japanese is
+`Shizuka`, with six native Japanese voices available in the shared voice catalog.
+Local Japanese chitchat requires a complete phrase after punctuation and wake-word
+normalization; questions such as `何している？` continue to the agent. If HAL cannot
+list voices, the ElevenLabs fallback still filters by the requested language,
+using Rachel for English and Shizuka for Japanese. An empty language returns all
+42 curated voices; unknown languages use the English pool.
+See [Japanese voice selection](realtime-voice.md#japanese-language-and-elevenlabs-voices).
+
 Ambient LED restoration delegates to HAL `/led/restore` after the quiet window. OS does not choose a fallback color or breathing effect; each device declares `ambient_led.resting` in `presets.json`. HAL preserves explicit user off/color and active overlay ownership.
 
 > OS Server (Go, Gin framework) runs on port 5000.
@@ -290,7 +334,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` are dropped when the last agent turn created by this handler (any type) was less than `sensing_turn_floor_s` seconds ago (config key, default `120`, `0` disables; guard mode bypasses). One cross-type floor on top of HAL's independent per-type gates — a burst of different event types costs at most one agent turn per window. Dropped events surface as `sensing_drop` (reason `ambient_floor`) in the Flow Monitor.
 3. No match → forward to OpenClaw via WebSocket `chat.send`
 4. If event has `images` → call `SendChatMessageWithImages` → send every attached photo with the text for AI vision analysis. A LIST, not a single field: a chat client can attach several at once and every wire format behind the gateway already carries `attachments[]`; a camera event simply sends one entry. For chat types (`web_chat` / `mqtt_chat`), each image is saved to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos attached to the SAME turn cannot collide) and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment). When the main model is text-only, the describe-first gate runs once PER image, **concurrently** (`safego`), and the descriptions are numbered `(image N of M)`. Concurrency is not an optimisation here: the gate runs inside the HTTP handler, so the caller's POST does not return until every describe finishes — a single describe measured 8-38 s, so two photos in series left the web chat silent for ~53 s, long enough that reloading the page (which cancels the request and loses the turn) is the natural move. Fanning out makes the wait the slowest image instead of their sum.
-5. The describe-first gate above covers only images entering a turn from OUTSIDE (chat/Telegram attachment, HAL's realtime look-frame handoff). A frame the agent captures MID-TURN with `/camera/snapshot` never passes through it — the shell tool returns only `{"path": ...}`, which a text-only main model cannot see. For that path the `camera` skill calls `POST /api/vision/look` (loopback-only, `system/server/vision.go`) instead of HAL directly: os-server takes the snapshot itself (`hal.Snapshot`, 768px/q75 fixed server-side) and returns `{"path": ..., "description": ...}`. The vision-capability branch lives here, not in the skill — when `vision.ModelSupportsVision` says the main model reads images itself, describe is SKIPPED entirely (no vision-model call, no 8-38s wait) and only `path` comes back for the agent to open. Describe failure returns 502 so the agent admits it could not see instead of guessing
+5. The describe-first gate above covers only images entering a turn from OUTSIDE (chat/Telegram attachment, HAL's realtime look-frame handoff). A frame the agent captures MID-TURN with `/camera/snapshot` never passes through it — the shell tool returns only `{"path": ...}`, which a text-only main model cannot see. For that path the `camera` skill calls `POST /api/vision/look` (loopback-only, `system/server/vision.go`) instead of HAL directly: os-server takes the snapshot itself (`hal.Snapshot`, 768px/q75 fixed server-side) and returns `{"path": ..., "description": ...}`. The description is a 1-3 sentence answer to `question` from the vision model with thinking disabled (~3 s on the lamp instead of 15-40 s). `"read_text": true` (the skill sets it only when the user asks to read text, a label, a sign or a brand) takes a 1280px frame and leaves thinking on: slower, but the model says small text is unreadable instead of inventing it. A look makes a single attempt so the agent can say it could not see rather than go silent for 80 s: 30 s for a plain look, 45 s for a `read_text` look (attached-image describe keeps 45 s + 35 s). A retry would be as slow as the first try when the gateway is slow. The vision-capability branch lives here, not in the skill — when `vision.ModelSupportsVision` says the main model reads images itself, describe is SKIPPED entirely (no vision-model call) and only `path` comes back for the agent to open. Describe failure returns 502 so the agent admits it could not see instead of guessing; the error message starts with an instruction to say so and stop, without another snapshot or `vision_analyze` (same vision model). A rule in the camera skill alone did not stop the agent from re-snapshotting into `vision_analyze` (112.8 s to the reply on lamp-52e6 with a forced failure, 11 s with the instruction in the error). On a voice turn the endpoint also speaks two cached cues through `FillerManager.SayInVoiceRun` (pools `look_capturing_main` before the photo — the shutter waits up to 2.5 s for it to finish — and `look_analyzing` after it, e.g. "Taking a look." / "Got it — give me a sec."); each cue pushes back that turn's dead-air filler by its cooldown and does not count toward `MaxFillersPerTurn`. Non-voice turns (Telegram, web chat, cron) stay silent. The realtime `look` tool captures inside HAL and is unaffected.
 6. Chat runs (`web_chat` / `mqtt_chat`) are tagged via `MarkWebChatRun(runID)` so the SSE handler suppresses TTS at lifecycle end — reply is rendered in the chat UI only (web SSE, or MQTT `chat.event` stream).
 
 ### Unknown-speaker enrollment routing
@@ -716,7 +760,8 @@ they were sold with.
 `autonomous_defaults` is a top-level object in `config.json` holding
 `base_url` / `api_key` / `model`. It is written **once**, by
 `captureAutonomousDefaults`, immediately before the first save that carries any
-credential — LLM, TTS, STT, or realtime key/URL — and never written again.
+credential — LLM, TTS, STT, or realtime key/URL — or an explicit LLM ownership
+choice, and never written again.
 Capturing twice would store the operator's own key under the Autonomous name
 and lose the real one for good, which is the exact failure it exists to prevent.
 A save touching nothing credential-shaped (wifi, rename, channels) does not
@@ -1104,6 +1149,18 @@ Core inference code lives in `system/intent/jev/` (`client`, `resolver`, and
 `catalog`). `system/intent/semantic.go` connects it to local rules and execution,
 keeping the model decision separate from HAL side effects.
 
+A local keyword pre-filter (`MayBeDeviceCommand` in `catalog.go`) runs before the
+Jev request. Text that is pure ASCII and shares no word prefix with the catalog
+vocabulary (light, lamp, bright, dim, volume, loud, colors, scene/mode names,
+music, stop, speak, time, follow, track, camera, ...) makes no Jev call and goes
+straight to the main runtime, saving the ~1-2 s decision that would only abstain.
+It logs `intent Jev decision outcome=skipped reason=no_device_keyword`. Any
+non-ASCII text (for example Vietnamese) always reaches Jev. A paraphrase using none
+of these words is still served by the main runtime. When adding a catalog intent,
+extend `jevKeywordStems`; `TestMayBeDeviceCommandKeepsLiveCorpus` fails if a
+positive live-corpus example would be filtered out. Harness session selection does
+not use this filter.
+
 The decision budget defaults to **3,000 ms**, capped at **3,000 ms** (nonpositive
 values use the default). Each decision makes one request without retries. A
 concurrent decision is skipped immediately, without queueing. Errors, timeout,
@@ -1413,7 +1470,7 @@ They cost differently, so they are bounded differently.
 
 | | In the system prompt? | Billed | Cap |
 |---|---|---|---|
-| `USER.md` | **yes** — a bootstrap file | **every turn** | 12000 chars (`bootstrapMaxChars`), then truncated tail-first |
+| `USER.md` | **yes** — a bootstrap file | **every turn** | 24000 chars per file (`bootstrapMaxChars`), also subject to the shared 48000-character bootstrap budget |
 | `KNOWLEDGE.md` | **no** — OpenClaw does not know the file | once per session, when the agent reads it | none by construction |
 
 `KNOWLEDGE.md` had no cap at all: the daily synthesis appends a `## YYYY-MM-DD`
@@ -1456,8 +1513,8 @@ Rules the agent is given, and why each one is load-bearing:
 |---|---|
 | One bullet per person under `## Users`, as `- **<label> (friend)** — call: …; notes: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
 | Short `key: value` segments, not prose; `call:` first | The template's own fields are singular (one `**Name:**`, one `**Timezone:**`) and cannot describe two people, but nesting them per person does not survive the file: `parseEntries` → `serialize` flattens every bullet to `- …`, so indented sub-fields detach from their person. Segments keep the form's *idea* — separated, labelled facts — in one prunable entry. The first attempt was flowing prose and produced a ~600-char paragraph with the address form buried in sentence four. |
-| Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. |
-| Each entry under ~400 chars | `USER.md` is billed on every turn, and past `bootstrapMaxChars` (12000) OpenClaw truncates with `text.slice(0, cutPoint)` — head kept, **tail cut** — and `## Users` is the tail. An oversized profile silently loses exactly the person data. `ReconcileUserProfiles` warns at 9000. |
+| Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. A title or honorific heard in a voice turn (Mr, Ms, Miss, Mrs, anh, chị…) does not count: speech recognition invents them (2026-10-05, green-lamp: "…is Lee" heard as "Miss Lee" became `call: Lee (Ms Lee)`). Write the bare name and never infer gender; keep a title only when the person explicitly asks for it. Same rule in `face-enroll` for labels and read-backs. |
+| Each entry under ~400 chars | `USER.md` is billed on every turn, and past the per-file `bootstrapMaxChars` (24000) or total bootstrap budget (48000), OpenClaw can truncate injected content. An oversized profile can lose person data from the prompt. `ReconcileUserProfiles` warns at 9000. |
 | Strangers get no entry | `## Users` is keyed by enrollment label; a passing face has none. Desk traffic belongs in `KNOWLEDGE.md`. |
 | Only write what was observed about **that** person | The original failure was two people fused into one profile (`Long/Leo`). Never move one person's habits onto another. |
 | Update and add only — **never delete** | Absence is not departure. Retiring a person is the OS's job (`ReconcileUserProfiles`, keyed on enrollment), not the agent's. |
@@ -1743,3 +1800,34 @@ All ingestion endpoints (telemetry, mood, wellbeing, posture, music suggestion, 
 ### Voice mutation authentication
 
 `POST /api/sensing/filler` uses the admin-or-direct-loopback gate, preserving HAL's internal realtime wait cues while blocking unauthenticated LAN calls. `POST /api/voice/file/remove` requires admin authentication even on loopback; the web UI's existing session cookie remains valid. Removal rejects profile/sample traversal and symlink escapes using directory-scoped `os.Root` operations. Valid sample/embedding deletion and last-WAV profile cleanup keep their existing behavior.
+
+### LLM configuration ownership
+
+`PUT /api/device/config` accepts `llm_config_mode: "os" | "runtime"`;
+`GET /api/device/config` returns the saved value. An absent/empty value retains
+legacy behavior, including Codex/Claude Code auth detection. An explicit `os`
+selection reapplies the OS provider even if key, URL and model have not changed;
+`POST /api/device/restore-defaults` with `section: "llm"` also selects `os`.
+
+`runtime` leaves native LLM provider/model/auth configuration to the operator for
+all six local runtimes. Gateway, workspace, skills and channel reconciliation
+continue. Saved OS credentials remain available to voice/backend services.
+Incoming LLM fields are ignored while runtime management is selected. Unchanged
+thinking settings no longer trigger runtime reconciliation on unrelated saves.
+
+Ownership applies across runtime switches; the target needs its own native
+login and provider/model selection. Credential migration is skipped in runtime
+mode and its baseline advances, preventing a deferred migration after returning
+to OS management. Mode changes synchronously apply config and refresh the
+runtime environment; an apply failure is returned after saving the mode, so the
+same selection can be retried. This does not verify subscription validity or
+successful model inference. Open a new terminal after changing ownership; an
+already-open shell retains its old environment.
+
+### Voice input mode
+
+`GET /api/device/config` returns `voice_input_mode`: `automatic` (default when absent) or `tap_to_talk`. `PUT /api/device/config` accepts the optional field; empty or unknown strings are rejected before mutation. Omission preserves the setting. `automatic` uses the existing `wakeword` flag; `tap_to_talk` bypasses wake and preserves that flag for switching back. MQTT `voice.input_mode` shares the persistence/apply path. Mode-only changes call HAL `POST /voice/input-mode` with a 30-second timeout; neither process restarts. HAL cancels pending capture and reconfigures its voice worker/session while preserving privacy and sleep. Save/apply failures allow same-value retries. Combined changes involving restart-required fields still restart HAL once. Config responses and BE ping report the configured mode; failed application still returns an error rather than success.
+
+`POST /api/device/voice-input-mode/toggle` takes no body and atomically toggles the saved mode under the same apply lock. Loopback callers bypass admin authentication; remote callers require it. Success returns `{"status":1,"data":{"mode":"tap_to_talk"},"message":null}` (or `automatic`) after HAL application. It is a non-idempotent physical-gesture operation: do not automatically retry on timeout; use an explicit mode set to retry a known desired state.
+
+`POST /api/agent/speech/cancel` keeps its empty-body behavior (global physical stop). Optional `{ "before_ms": <Unix milliseconds> }` suppresses speech/fillers from older turns without a delayed global HAL stop or cancelling hardware actions. HAL uses this same-device cutoff before admitting a replacement manual recording. Device sensing may include `captured_at_ms` alongside a Harness-off snapshot; validated voice-command/handled turns retain that capture age in their unique run ID so delayed dispatch cannot escape suppression.

@@ -311,7 +311,9 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 		return
 	}
 	staticVoices, ok := domain.TTSVoicesByProvider[provider]
-	if !ok {
+	if provider == domain.TTSProviderElevenLabs {
+		staticVoices = domain.ElevenLabsVoicesForLang(lang)
+	} else if !ok {
 		staticVoices = domain.TTSVoices
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(staticVoices))
@@ -623,4 +625,14 @@ func (h *DeviceHandler) RemoveMCPTool(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
+}
+
+// ToggleVoiceInputMode handles a device gesture without a client-side stale read.
+func (h *DeviceHandler) ToggleVoiceInputMode(c *gin.Context) {
+	mode, err := h.service.ToggleVoiceInputMode()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.VoiceInputModeData{Mode: mode}))
 }

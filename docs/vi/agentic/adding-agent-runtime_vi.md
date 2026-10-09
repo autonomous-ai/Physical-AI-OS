@@ -58,6 +58,18 @@ install, migration, skills, hooks, reset.
 
 ---
 
+### Quyền quản lý cấu hình LLM
+
+`llm_config_mode` là một lựa chọn chung cho thiết bị, độc lập với `agent_runtime`:
+
+- Thiếu/rỗng: giữ hành vi cũ, gồm nhận diện subscription của Codex/Claude Code.
+- `os`: áp dụng rõ ràng provider, model và credentials đã lưu trong OS, kể cả khi có native auth.
+- `runtime`: giữ cấu hình provider/model/auth native. Onboarding vẫn quản lý gateway, workspace, skills và channels; presync, sync định kỳ và migration cấu hình không được ghi đè LLM native.
+
+Settings → Runtime chọn mode qua `PUT /api/device/config`. Native mode không chọn model mới hoặc đăng nhập: cấu hình hiện có, kể cả model OS trước đó, vẫn giữ nguyên đến khi người vận hành chọn provider/model bằng CLI/config của runtime. Dùng đúng user/home của daemon, restart runtime sau thay đổi native và mở terminal mới để bỏ environment proxy cũ. Đổi runtime không migrate credentials subscription; cần cấu hình riêng từng runtime.
+
+Giữ key/base URL trong OS cho voice/backend. Khôi phục mặc định AI Brain chọn rõ `os` và áp dụng lại kể cả khi giá trị đã lưu không đổi. Nếu áp dụng mode lỗi, caller nhận lỗi nhưng mode đã được lưu; sửa nguyên nhân rồi thử áp dụng lại. Áp dụng thành công không xác nhận tài khoản/subscription hợp lệ. Luồng này chưa được test trên device bằng tài khoản subscription thật.
+
 ## 1. Hợp đồng — implement `domain.AgentGateway`
 
 Backend nằm ở `runtimes/<name>/`, `*Service` của nó phải thoả **toàn bộ**

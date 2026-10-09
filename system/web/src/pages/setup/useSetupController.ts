@@ -101,12 +101,13 @@ export function useSetupController(mode: SetupMode) {
   const [sttApiKey, setSttApiKey] = useState("");
   const [sttBaseUrl, setSttBaseUrl] = useState("");
   const [sttLanguage, setSttLanguage] = useState<string>(() => {
-    const VALID = ["en", "vi", "zh-CN", "zh-TW"];
+    const VALID = ["en", "vi", "ja", "zh-CN", "zh-TW"];
     if (urlParams.sttLanguage) {
       if (VALID.includes(urlParams.sttLanguage)) return urlParams.sttLanguage;
       console.warn(`[setup] URL stt_language="${urlParams.sttLanguage}" not in ${VALID.join(",")}, ignoring`);
     }
     const loc = (navigator.language || "").toLowerCase();
+    if (loc === "ja" || loc.startsWith("ja-")) return "ja";
     if (loc.startsWith("vi")) return "vi";
     if (loc.startsWith("zh-tw") || loc.startsWith("zh-hant") || loc.startsWith("zh-hk")) return "zh-TW";
     if (loc.startsWith("zh")) return "zh-CN";

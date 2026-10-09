@@ -350,9 +350,11 @@ func resolveSTTLanguage() string {
 	return strings.TrimSpace(c.STTLanguage)
 }
 
-// otaUpdateStartPhrase returns the localized "device is updating" phrase (vi/zh/en).
+// otaUpdateStartPhrase returns the localized "device is updating" phrase (vi/zh/ja/en).
 func otaUpdateStartPhrase(lang string) string {
 	switch {
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(lang)), "ja"):
+		return "デバイスを更新しています。少し時間がかかりますので、そのままお待ちください。"
 	case strings.HasPrefix(lang, "vi"):
 		return "Thiết bị đang cập nhật, sẽ mất một chút thời gian, vui lòng chờ trong khi cập nhật."
 	case strings.HasPrefix(lang, "zh"):

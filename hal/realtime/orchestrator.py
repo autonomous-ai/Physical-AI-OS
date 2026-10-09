@@ -109,6 +109,21 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "skill. This includes general web research such as asking agent temp to find "
     "restaurants; do not answer, search, or claim results yourself. Never perform "
     "that agent task on the device. "
+    "Device sleep/wake requests such as 'Can you sleep?', 'Go to sleep', "
+    "'Wake up' and 'Can you wake up?' are mode-change actions, not identity chat: "
+    "delegate the current user's words without speech. Never claim you are always "
+    "awake or that the mode changed. Main checks capabilities and sleep restrictions "
+    "(including Harness voice mode), executes and confirms. General questions such "
+    "as 'Do robots need sleep?' remain direct; 'I can't sleep' is user wellbeing, "
+    "not a device sleep command. Addressed-speech rules still apply. "
+    "Addressed joint requests and corrections ('Can we sleep now?', "
+    "'I mean, can you sleep now?', 'I mean, can we sleep now?', 'Ngủ đi') "
+    "also require the handoff before ANY speech, overriding direct-answer defaults, "
+    "persona/identity chat and delegation-latency preferences. Do not reinterpret "
+    "them as biological sleep questions. Never substitute 'I don't go to sleep "
+    "like humans do', 'I'll lower my light', 'I'll stay quiet' or a goodnight "
+    "for execution; do not call complete_response. Preserve the user's words. "
+    "A sleep keyword alone does not establish a device-control request. "
     "Finding, locating or looking for a physical object or a person — in ANY "
     "phrasing: 'find my keys', 'where is my cup', 'can you help me find my pen', "
     "'do you see my pen anywhere', 'look around for X', 'where are you' — is a "
@@ -134,6 +149,13 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "timing, quantities, and supplied parameters. Do not summarize away details, "
     "translate into English, append commentary, or retell prior tasks; the main agent "
     "already has that conversation. Never invent missing details. "
+    "Never say a task the main agent is handling is done, saved or remembered — "
+    "face or voice enrollment, reminders, messages, memory: only the main agent "
+    "reports its own results. If the user asks about such a task, delegate. "
+    "Face and voice enrollment always delegate, even when the user seems already "
+    "known: 'remember my face', 'remember me', 'this is me', 'learn my voice', "
+    "'forget my face', 'update my photo'. Only the main system can check and change "
+    "who is enrolled; never answer that you already know or remember them. "
     "Keep the user's own key words rather than renaming the request into a category: "
     "the main agent routes on vocabulary, so 'show me how far you can move' must "
     "arrive as those words, not as 'movement demonstration'. "
@@ -424,6 +446,9 @@ class RealtimeOrchestrator:
         self._last_activity_monotonic: float = 0.0
         # A reconnect completing after stop must never publish a live agent into the stopped HAL.
         self._lifecycle_lock: threading.Lock = threading.Lock()
+        self._startup_generation = 0
+        self._startup_pending = None
+        self._startup_worker = None
         self._consecutive_silent: int = 0  # zombie-session guard (see stream_output)
         # A live session owns the mic; suppresses every post-turn recycle.
         self._live_active: bool = False
@@ -569,10 +594,14 @@ class RealtimeOrchestrator:
 
     def _begin_rebuild(self) -> bool:
         """Reserve the rebuild slot before a synchronous or background rebuild."""
-        if not self._rebuild_lock.acquire(blocking=False):
-            return False
-        self._rebuild_done.clear()
-        return True
+        with self._lifecycle_lock:
+            if not self._started.is_set():
+                return False
+            if not self._rebuild_lock.acquire(blocking=False):
+                return False
+            self._rebuild_done.clear()
+            self._rebuild_generation = getattr(self, "_startup_generation", 0)
+            return True
 
     def _finish_rebuild(self) -> None:
         """Publish that the current rebuild has completed, successfully or not."""
@@ -588,36 +617,39 @@ class RealtimeOrchestrator:
         """Build a replacement session while holding the rebuild reservation."""
         provider: str = config.REALTIME_PROVIDER.strip().lower()
         old = self._agent
+        generation = self._rebuild_generation
         new: VoiceAgentBase | None = None
         try:
             instructions = self._context.build_instructions()
             new = self._make_agent(provider, instructions)
             if new is None:
                 if discard_old_on_failure:
-                    self._agent = None
+                    with self._lifecycle_lock:
+                        if generation == getattr(self, "_startup_generation", 0):
+                            self._agent = None
                 return False
             new.connect()
             with self._lifecycle_lock:
-                if (
-                    not self._started.is_set()
-                    or (cancel_event is not None and cancel_event.is_set())
-                ):
-                    logger.info(
-                        "[realtime] Discarding replacement session — orchestrator stopped"
-                    )
-                    new.disconnect()
-                    return False
-                self._agent = new
-            self._idle_parked = False
-            self._park_resume_failed = False
-            self._last_activity_monotonic = time.monotonic()
-            self._session_connected_monotonic = self._last_activity_monotonic
-            self._consecutive_silent = 0
-            self._idle_reset_pending = False
-            self._turns_since_recycle = 0
-            # A fresh session has no images, so reset the look reuse-guard.
-            self._looked_this_turn = False
-            self._last_look_sent_monotonic = 0.0
+                current = (
+                    generation == getattr(self, "_startup_generation", 0)
+                    and self._started.is_set()
+                    and not (cancel_event is not None and cancel_event.is_set())
+                )
+                if current:
+                    self._agent = new
+                    self._idle_parked = False
+                    self._park_resume_failed = False
+                    self._last_activity_monotonic = time.monotonic()
+                    self._session_connected_monotonic = self._last_activity_monotonic
+                    self._consecutive_silent = 0
+                    self._idle_reset_pending = False
+                    self._turns_since_recycle = 0
+                    self._looked_this_turn = False
+                    self._last_look_sent_monotonic = 0.0
+            if not current:
+                logger.info("[realtime] Discarding replacement session — generation retired")
+                new.disconnect()
+                return False
             logger.info("[realtime] Fresh session connected before turn (%s)", reason)
             return True
         except Exception:
@@ -630,7 +662,9 @@ class RealtimeOrchestrator:
                     logger.exception("[realtime] failed replacement disconnect failed")
             # A dropped Manual-VAD activity must never become the next turn; mark it dead.
             if discard_old_on_failure:
-                self._agent = None
+                with self._lifecycle_lock:
+                    if generation == getattr(self, "_startup_generation", 0):
+                        self._agent = None
             return False
         finally:
             self._finish_rebuild()
@@ -699,8 +733,21 @@ class RealtimeOrchestrator:
             reason, "rt-noise-rebuild", discard_old_on_failure=True
         )
 
-    def recover_session(self, reason: str) -> bool:
-        """Reconnect a fresh session synchronously for a mid-turn 1011 replay; True if ready."""
+    def recover_cancelled_turn(self) -> bool:
+        """Retire the cancelled provider before reconnecting off the mic thread."""
+        with self._lifecycle_lock:
+            old = self._agent
+            self._agent = None
+        if old is not None:
+            self._disconnect_in_background(old, "automatic-reply-cancelled")
+        return self._rebuild_in_background(
+            "automatic-reply-cancelled", "rt-cancel-rebuild", discard_old_on_failure=True,
+        )
+
+    def recover_session(self, reason: str, *, discard_old_on_failure: bool = False) -> bool:
+        """Reconnect for replay, or discard a cancelled session even if reconnect fails."""
+        if discard_old_on_failure:
+            return self._rebuild_now(reason, discard_old_on_failure=True)
         return self._rebuild_now(reason)
 
     def set_live_active(self, active: bool) -> None:
@@ -903,21 +950,25 @@ class RealtimeOrchestrator:
             return
         self._connect_retry_thread = threading.Thread(
             target=self._connect_retry_loop,
+            args=(self._connect_retry_stop,),
             daemon=True,
             name="rt-initial-connect-retry",
         )
         self._connect_retry_thread.start()
 
-    def _connect_retry_loop(self) -> None:
+    def _connect_retry_loop(self, stop_event=None) -> None:
         """Try fresh sessions until the initial connection recovers or HAL stops."""
+        stop_event = stop_event if stop_event is not None else self._connect_retry_stop
         delay_s = INITIAL_CONNECT_RETRY_DELAY_S
-        while not self._connect_retry_stop.is_set():
+        while not stop_event.is_set():
             if self._rebuild_now(
-                "initial-connect-retry", cancel_event=self._connect_retry_stop
+                "initial-connect-retry", cancel_event=stop_event
             ):
                 # Recovered: the transient failure's traceback is dropped.
                 self._initial_connect_exc = None
                 logger.info("[realtime] Initial connection recovered automatically")
+                return
+            if stop_event.is_set():
                 return
             if self._initial_connect_exc is not None:
                 logger.error(
@@ -930,57 +981,14 @@ class RealtimeOrchestrator:
                 "[realtime] Initial connection still unavailable — retrying in %.0fs",
                 delay_s,
             )
-            if self._connect_retry_stop.wait(delay_s):
+            if stop_event.wait(delay_s):
                 return
             delay_s = min(delay_s * 2, INITIAL_CONNECT_RETRY_MAX_DELAY_S)
 
     def start(self) -> None:
-        """Create the agent based on config and connect."""
-        provider: str = config.REALTIME_PROVIDER.strip().lower()
-        if provider in ("none", "off", "disabled", ""):
-            logger.info("Realtime orchestrator disabled (provider=%s)", provider)
-            return
+        from hal.realtime.startup import start
 
-        self._connect_retry_stop.clear()
-        self._initial_connect_exc = None
-
-        instructions: str = self._context.build_instructions()
-        logger.info(
-            "[realtime] Context manager built instructions (%d chars)",
-            len(instructions),
-        )
-
-        self._agent = self._make_agent(provider, instructions)
-        if self._agent is None:
-            logger.warning("Unknown realtime provider: %s — disabled", provider)
-            return
-
-        try:
-            self._agent.connect()
-            self._session_connected_monotonic = time.monotonic()
-            logger.info(
-                "[realtime] Realtime orchestrator started (provider=%s)", provider
-            )
-        except Exception as e:
-            # One WARNING now; _connect_retry_loop logs ERROR only if the retry does not recover.
-            self._initial_connect_exc = e
-            logger.warning(
-                "[realtime] Failed to connect realtime agent (%s: %s) — "
-                "retrying in background",
-                type(e).__name__, e,
-            )
-        self._started.set()
-        self._last_activity_monotonic = time.monotonic()
-        if not self.available:
-            self._start_connect_retry_loop()
-        self._start_idle_park_loop()
-
-        # Background: running before connect would keep `available` False and leak early turns.
-        threading.Thread(
-            target=self._catch_up_memory_summaries,
-            daemon=True,
-            name="realtime-catchup-summarize",
-        ).start()
+        start(self)
 
     def _catch_up_memory_summaries(self) -> None:
         """Summarize memory left unsummarized by a previous session (background)."""
@@ -990,20 +998,30 @@ class RealtimeOrchestrator:
         except Exception:
             logger.exception("[realtime] Failed to catch up on memory summarization")
 
-    def stop(self) -> None:
-        """Disconnect the agent and summarize unsummarized memory."""
-        self._connect_retry_stop.set()
-        self._idle_park_stop.set()
-        self._idle_parked = False
+    def stop(self, *, summarize=True) -> None:
+        """Disconnect; mode transitions defer memory summaries to next startup."""
         with self._lifecycle_lock:
+            self._connect_retry_stop.set()
+            self._idle_park_stop.set()
+            self._idle_parked = False
+            self._startup_generation = getattr(self, "_startup_generation", 0) + 1
+            self._startup_pending = None
             self._started.clear()
             agent = self._agent
             self._agent = None
-        try:
-            self._context.summarize_device_memory()
-            self._context.summarize_realtime_memory()
-        except Exception:
-            logger.exception("[realtime] Failed to summarize memory on shutdown")
+        # The retry may still be inside an uncancellable cloud connect. Its
+        # captured stop event and rebuild generation permanently retire it.
+        # The idle watchdog never connects; join it before reusing its event.
+        idle_worker = getattr(self, "_idle_park_thread", None)
+        if idle_worker is not None and idle_worker is not threading.current_thread():
+            idle_worker.join()
+        self._idle_parked = False
+        if summarize:
+            try:
+                self._context.summarize_device_memory()
+                self._context.summarize_realtime_memory()
+            except Exception:
+                logger.exception("[realtime] Failed to summarize memory on shutdown")
 
         if agent is not None:
             try:

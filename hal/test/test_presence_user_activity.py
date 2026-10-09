@@ -5,13 +5,11 @@ from unittest import mock
 
 import hal.config as config
 from hal.drivers.sensing.presence_service import PresenceState, PresenseService
-from hal.presets import RGB_CMD_SOLID
 
 
 def _service(rgb=None, enabled=True):
     svc = PresenseService(rgb_service=rgb or mock.Mock(), send_event=mock.Mock(),
                           auto_enabled=enabled)
-    svc._last_color = (10, 20, 30)
     svc._light_is_off = lambda: False
     svc._is_guard_mode = lambda: False
     svc._is_sleeping = lambda: False
@@ -50,10 +48,11 @@ def test_activity_while_dimmed_brings_the_light_back():
     svc = _service(rgb)
     svc._state = PresenceState.IDLE
 
-    svc.on_activity("button")
+    with mock.patch("hal.app_state._restore_user_led") as restore:
+        svc.on_activity("button")
 
     assert svc.state == PresenceState.PRESENT
-    rgb.dispatch.assert_called_once_with(RGB_CMD_SOLID, (10, 20, 30))
+    restore.assert_called_once_with()
 
 
 def test_activity_on_a_sleeping_device_leaves_the_strip_to_sleep():

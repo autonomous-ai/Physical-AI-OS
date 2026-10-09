@@ -182,7 +182,10 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 
 All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` / `EMA_ALPHA` proportional path was removed in the package split.)
 
-Set `HAL_TRACKING_MAX_DURATION_S` in the Lamp's `/opt/hal/.env` to choose the wall-clock session limit; the installed Lamp default is `10`. Restart the `hal` service after changing it.
+Set `HAL_TRACKING_MAX_DURATION_S` in the Lamp's `/opt/hal/.env` to choose the wall-clock session limit; the installed Lamp default is `10`. Restart the `hal` service after changing it. A `/servo/track` call may pass `max_duration_s` to stop
+sooner (never later than the cap): the sensing skill's greeting look uses `3`, because a lamp that
+locks onto a face for 10 s after saying hello reads as a camera watching, not as a glance of
+recognition.
 
 ### Servo Position Limits
 
@@ -523,7 +526,9 @@ lamp decides for itself. A sweep is entered when:
   Monitor. The agent waits for the body and answers from it, the way `/api/vision/look` already
   works.
 - they accept an offer after a failed look — *"I can't see it. Want me to look around?"*
-- **the look-aim is about to give up** — before `look_lost` claims *"I can't find you"*, which until
+- **the look-aim is about to give up** — but as a **glance** (`glance=True`, 2 looks at the bearing,
+  no `look_still_searching`), not the full sweep: asked to look and not seeing anyone, a living thing
+  glances about; it does not quarter the room. Before `look_lost` claims *"I can't find you"*, which until
   now it said having only turned toward a remembered bearing. A bearing is a guess about where
   someone *was*, not a search, so the phrase should be earned. The aim's deadline **stops counting**
   for the duration (`t_end += time.monotonic() - swept_at` in `aim_for_look`): that deadline exists so
@@ -531,7 +536,8 @@ lamp decides for itself. A sweep is entered when:
   that, and charging the sweep against a budget it cannot fit in would mean never sweeping at all.
 - **the gaze watcher has been alone too long** — `HAL_GAZE_SWEEP_AFTER_S` (30 s) with nobody seen, or
   a repoint that turned to the bearing and found nobody there. Nobody asked for this one, which is
-  why it is the only entry with a cooldown — see *Looking around on its own*.
+  why it is the only entry with a cooldown and why it is only a **glance**, not this sweep — see
+  *Looking around on its own*.
 
 `POST /servo/search` — sweeps for a subject. Body (all optional): `{"target": "cup", "exhaustive": true}`.
 
@@ -603,7 +609,7 @@ gaze watcher's look-around) walks `USER_LOOK_CIRCLE`: the same six looks with th
 so centre, left, round the **top**, out to the right. Faces sit at or above the seated view the sweep
 starts from; the bottom looks point at desks and keyboards. Device-observed 2026-09-30 on green-lamp:
 a standing user whose head was above every look was missed through all 18 looks. Object searches
-(`POST /servo/search`, "find my things") and look-aim's fallback sweep keep the downward ring, where
+(`POST /servo/search`, "find my things") keep the downward ring, where
 things on the desk are. The upward looks share the `WRIST_PITCH_MIN` clamp described below.
 
 **Only `wrist_roll` and `wrist_pitch` move during a look.** The base turns once per bearing and the
@@ -634,8 +640,9 @@ cocked 45° over, facing a wall. Found → the head is straightened by turning t
 head was turned, so the camera keeps pointing at the subject with the head level.
 
 **When the gaze watcher sweeps, it looks for the user, not for anybody (#545).** `gaze._maybe_sweep`
-calls `search_for_subject(for_user=True)`. Every other caller keeps today's behaviour:
-`POST /servo/search` (objects, `exhaustive`) and look-aim's own fallback sweep. At each look it
+calls `search_for_subject(for_user=True, glance=True)`. Every other caller keeps today's behaviour:
+`POST /servo/search` (objects, `exhaustive`); look-aim's fallback is a glance too, but without the
+user check. At each look it
 watches the faces in view for about 1.5 s (`user_check.observe_faces`, 6 frames; it skips the dwell
 when the first frame has no face) and stops only on a face that passes `user_check.adopts_bearing`:
 at least `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall, within
@@ -717,16 +724,17 @@ decides **when**, via `POST /api/sensing/filler` with `{"pool": "..."}`.
 |---|---|---|
 | `look_searching` | the first step toward the remembered bearing | **on** (`HAL_LOOK_AIM_SPEAK`) |
 | `look_found` | a subject appears **after** a search was announced | on (same flag) |
-| `look_still_searching` | the midpoint of a sweep — stop 2 of 3, head centred (`_say_at_the_midpoint`) | on (`HAL_LOOK_AIM_SPEAK`) |
+| `look_still_searching` | the midpoint of a full sweep (`/servo/search`) — stop 2 of 3, head centred (`_say_at_the_midpoint`). Never on look-aim's glance | on (`HAL_LOOK_AIM_SPEAK`) |
 | `look_capturing` | the aim actually moved before the shutter | on (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
 
 The gating matters more than the phrases. **Nothing is said when the subject is already centred** —
 that capture completes in a few hundred milliseconds, so every phrase here is conditional on the aim
 having actually moved. *"There you are"* only fires as the resolution of an announced search, never
 on its own. Searching announces **once** per sweep rather than per step, plus a single
-`look_still_searching` line at the midpoint — the sweep is ~20 s long, and without it the opening
-phrase and the verdict sit either side of twenty seconds of silence, which reads as a lamp that has
-stopped rather than one that is looking. And the capture line fires only when the aim actually moved
+`look_still_searching` line at the midpoint of a full sweep — that sweep is ~20 s long, and without
+it the opening phrase and the verdict sit either side of twenty seconds of silence, which reads as a
+lamp that has stopped rather than one that is looking. Look-aim's glance is ~4 s and says nothing in
+between: narrating a short glance is a machine reporting its state. And the capture line fires only when the aim actually moved
 (`res.aimed and res.iterations > 0`): an aim that moved nothing says nothing, and — the part that was
 wrong until this branch — neither does an aim that searched and **failed**, which used to follow
 *"I can't find you"* with *"let me take a look"*.
@@ -753,6 +761,18 @@ and `POST /api/sensing/filler` answers 200 either way. A pool that resolves empt
 simply does not speak.
 
 ## Gaze framing — keeping the user in shot
+
+Gaze sampling pauses during the transition into idle and for 350 ms after the
+first idle playback frame. It then samples during the **first** idle cycle,
+without waiting for that entire recording to finish. Previously `_idle_settled`
+only became true at the end of the first cycle, so repeated idle servo writes
+could suppress gaze for the whole cycle even when the pose did not change.
+The separate playback timestamp does not change the motor-noise flag, gaze
+acceptance thresholds, or the guard against repointing when a face is already
+visible. At a configured 6 samples/s, sampling can resume on the next watcher
+iteration after the 350 ms interval; actual camera/processing time still applies.
+This boundary is covered by deterministic playback tests, not yet by a new
+on-device latency measurement.
 
 Everything above is asked for: a look, a track, a search. This section is the watcher in
 `hal/drivers/tracking/gaze.py` doing it unprompted, so that when the user does speak the camera is
@@ -917,35 +937,59 @@ Three further behaviours are worth stating because each was a bug first:
 
 - **The verdict is judged on a face, never on a body (#545).** A face at least
   `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall confirms the bearing. Facing and identity
-  are not required, because the user often talks while looking at their own monitor. Only a smaller
-  face is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
+  are not required, because the user often talks while looking at their own monitor. A smaller face
+  is no face at all (see "A far face is no face" below), so a repoint that sees only one is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
   face across the room became "the user". **Size alone decides near or far.** Position does not: a
   bearing a few degrees off the user's seat puts them at the frame side, and a ±15% centre gate tried
   on 2026-09-30 ruled the user's own 35% face (dx +34%) "far". Size separates the two instead: in the
   2026-09-30 frames a neighbour one desk over reached at most 13.6% and the user was never under
   19.2%, so the floor sits at 15%. The watcher stamps a
-  near-face and a far-face clock (`_note_face_size`) for every face it detects, and the verdict reads
-  those.
+  near-face clock (`_note_face_size`) for every face it is handed, and the verdict reads it.
 - **Only a body with its head above the frame waits for the climb.** A person box cut off by the frame
   top (the `_headroom_from_person` test) stamps `_last_headless_body_t`, and only that starts a climb.
   A body fully in frame already shows whatever face it has, so it is judged on the faces: near = hit,
-  only far = miss, none = miss (`found a body but no face`). Device-observed 2026-09-30: the user's
+  otherwise its **size** decides (#567). A nearest person box
+  at least `HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC` (20%) of the frame is someone at the desk whose
+  face the detector dropped — side-on, looking down — and the repoint is **not scored** (no strike, no
+  sweep), even with a co-worker's face in view. A smaller body = miss (`found a body but no face`), and
+  so is nobody at all. Height cannot make this call: on 2026-10-05 a non-user reached 73% of the frame
+  height. Area does: seated users measured 26–73% of the frame on three lamps, co-workers and passers-by
+  at most 13%. A near body **never confirms** the bearing. The same rule closes a climb: a climb that
+  ends with a near body is not scored. Every repoint verdict logs the largest body
+  it saw (`largest body N% of frame`) so the threshold can be tuned from device logs. Device-observed 2026-09-30: the user's
   whole body in frame started a "climb" that never moved the head. A headless body prompts the climb above and holds the verdict
   for up to `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), re-prompting the climb even with no
-  conversation open. A near face = hit, only a far face = miss, no face at all = **not scored**.
+  conversation open. A near face = hit; a near body = **not scored**; only a body too small to be at the desk =
+  **miss** (a co-worker standing across the room, clipped at the top, whose small face is no face);
+  nobody at all = **not scored**. A user's own clipped torso is always near.
   Scoring a torso-only repoint as a miss once deleted correct bearings while the user sat in front of
   the lamp.
-- **A far face does not hide a body while a repoint is judged.** The watcher normally looks for a body
-  only when it finds no face, so a co-worker's small face across the room (below
-  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`) hid a user standing in front of the lamp with their head
-  above the frame: no body, no climb, "found only a far face", a miss (device-observed 2026-09-30 on
-  green-lamp). While a repoint verdict or its climb is pending (`_judging_repoint`), a far face also
-  runs person detection (`_body_behind_a_far_face`). A body found that way counts as the body and
-  drives the climb's `dy` from its top edge instead of the far face. Outside that window it does not
-  run: an office almost always has a far face, and person detection on most samples costs CPU.
+- **A far face is no face (#567).** The face picker (`detect_face_with_landmarks`) returns only faces at
+  least `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall, and never less than
+  `HAL_GAZE_MIN_FACE_PX`; the one nearest the centre among those wins. A smaller face is dropped, with
+  no largest-face fallback. It used to come back as "the face" whenever the user's own was not found,
+  and the watcher looks for a body only when it finds no face. So a co-worker's small face hid a user
+  standing in front of the lamp (green-lamp 2026-09-30: no body, no climb, a miss), pulled the pan
+  toward the co-worker, and on 2026-10-05 16:33:42 (green-lamp) hid the back of the user's head at 30%
+  of the frame, so the near-body guard below never fired. Now such a sample takes the no-face path:
+  person detection runs, the user's body drives the climb's `dy` and the near-body clock, and nothing
+  pans. The cost is a YOLO person pass on those samples, as for any sample with no face.
+  The body gaze reasons about is the **nearest** person box — the tallest one near enough to be the
+  asker, the same `_pick_nearest` rule look-aim and the search use — not `detect()`'s most confident
+  box. On lamp-4ace (2026-10-05 13:48:51) the user's 30% box at confidence 0.78 lost to a co-worker's
+  4% box at 0.83, so the user's clipped torso never started the climb. The candidates come from the
+  local YOLO only (`detect_candidates`), never the remote YOLO-World fallback `detect()` has: with
+  `HAL_TRACKING_DETECT_LOCAL=false` or no local weights, gaze sees no body at all — no climb and no
+  near-body evidence.
 - **It will not turn away from a face already in frame.** If a face was seen within
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
   the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.
+- **Nor from someone sitting in front of it (#567).** `blind` at speech start means fewer than
+  `HAL_GAZE_MIN_SAMPLES` measured faces in the last `HAL_GAZE_WINDOW_S`: the face was not found, or the
+  sampler had nothing fresh. It says nothing about bodies. If the nearest person box was near (see
+  above) within `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, the reacquire declines (`no repoint: someone is
+  already in front of the lamp`): the lamp is already on the user, and the turn could only end in a
+  wrong verdict. A user measured *facing away* is a different verdict (`skip`) and never repoints.
 - **The hold ends with the utterance.** A speech-triggered reacquire points the lamp with
   `move_and_hold`, which drops whatever recording was playing and sets `_idle_settled` — correct
   for the utterance, wrong afterwards, because nothing else re-arms idle. The lamp simply stopped
@@ -960,8 +1004,14 @@ prints once a minute rather than once a pass.
 
 ### Looking around on its own
 
-If a repoint is scored a miss (nobody, or only a far face), `_verify_repoint` calls the same `/servo/search` sweep documented above
-with `confirmed_miss=True`. Since the repoint above is speech-driven, so is the sweep: the lamp
+If a repoint is scored a miss (nobody, or only a body too small to be at the desk), `_verify_repoint` calls `_maybe_sweep`
+with `confirmed_miss=True`, which **glances** rather than sweeps: `glance=True` keeps the base on the
+seed bearing and walks only `GLANCE_LOOKS` — the head left 45°, then right 45° — so 2 looks, about
+4 s, with no `look_still_searching` line. Then it returns to the starting pose and lets it go. The
+rule is *does a living thing do this?*: one that turns to a voice and finds nobody glances about; it
+does not quarter the room at 3 bearings × 6 looks like a security camera, which is what the full
+18-look sweep looked like when it ran unasked. The full sweep stays for searches somebody asked for
+(`/servo/search`). Since the repoint above is speech-driven, so is the sweep: the lamp
 searches because somebody spoke and it could not find them, never because a room merely looks empty.
 An absence trigger (`HAL_GAZE_SWEEP_AFTER_S`) still exists in `_maybe_sweep` but nothing reaches it —
 the watcher loop no longer calls the sweep at all. The cooldowns still apply, and the two exist because
@@ -983,13 +1033,13 @@ count as repoint evidence only if seen after the turn.
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `HAL_GAZE_SWEEP` | `true` | Autonomous look-around on/off. |
-| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Nobody seen for this long. Longer than `HAL_GAZE_REPOINT_AFTER_S` (12 s) so the cheap move is always tried first and the ~20 s sweep stays the escalation, not the reflex. |
+| `HAL_GAZE_SWEEP` | `true` | Autonomous look-around (the glance) on/off. |
+| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Nobody seen for this long. Longer than `HAL_GAZE_REPOINT_AFTER_S` (12 s) so the cheap move is always tried first and the ~4 s glance stays the escalation, not the reflex. |
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Between sweeps when a bearing exists. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Between sweeps when there is no bearing at all. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Facing share needed to adopt a new bearing. Lower than the wake gate's 0.6: a still user measured 50%. Not 0.3: the window holds 2–3 samples, so that is one glance. |
 | `HAL_GAZE_BEARING_MAX_YAW_DEG` | 25 | Head yaw that counts as facing for a new bearing. Its own limit, never widened at the frame edge, so wake-gate tuning cannot loosen it. |
-| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Face height (of frame height) that counts as near enough to be at the desk, for every user-check path. Measured in frames: office co-workers 8.3–13.6%, user 19.2–46%. A lamp placed further from its user may need it lower in `.env`. |
+| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Face height (of frame height) that counts as near enough to be at the desk, for every user-check path. Gaze's face picker also drops any smaller face outright (#567), so it gates gaze wake's votes and pan samples too. Measured in frames: office co-workers 8.3–13.6%, user 19.2–46%. A lamp placed further from its user may need it lower in `.env`. |
 
 ### Remembered user bearing
 

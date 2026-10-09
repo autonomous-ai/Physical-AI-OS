@@ -189,6 +189,27 @@ class RouterTest(unittest.TestCase):
         self.assertIsNone(plugin.before_turn(user_message="  /connectors read email"))
         self.assertEqual(self.calls, [])
 
+    def test_event_kind_decision_is_reused_but_user_text_is_not(self):
+        plugin = self.make()
+        for _ in range(2):
+            context = plugin.before_turn(user_message="[sensing:sound] loud noise detected")["context"]
+            self.assertIn("connectors", context)
+        self.assertEqual(len(self.calls), 1)
+        plugin.before_turn(user_message="[sensing:presence.enter] someone arrived")
+        self.assertEqual(len(self.calls), 2)
+        for _ in range(2):
+            plugin.before_turn(user_message="[user] read my email")
+        self.assertEqual(len(self.calls), 4)
+        # A catalog change invalidates the event decision.
+        plugin.catalog = lambda: [{"name": "mail", "description": "Read email", "category": "openclaw-imports"}]
+        plugin.before_turn(user_message="[sensing:sound] loud noise detected")
+        self.assertEqual(len(self.calls), 5)
+
+    def test_voice_turns_skip_the_decision(self):
+        plugin = self.make()
+        self.assertIsNone(plugin.before_turn(user_message="[user] [via:voice] read my email"))
+        self.assertEqual(self.calls, [])
+
     def test_catalog_keeps_current_session_context_in_worker(self):
         platform = contextvars.ContextVar("test_hermes_platform", default="unknown")
         plugin = self.make()

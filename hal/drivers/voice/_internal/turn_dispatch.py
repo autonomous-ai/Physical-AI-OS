@@ -122,6 +122,7 @@ def dispatch_turn(
     interaction_id: str = "",
     harness_voice: dict | None = None,
     voice_turn_type: str = "",
+    suppress_auto_fillers: bool = False,
 ):
     """Identify the speaker, send the turn to the OS server, and submit SER."""
     if harness_voice and (harness_voice.get("unavailable") or harness_voice["enabled"]):
@@ -151,6 +152,8 @@ def dispatch_turn(
         return
 
     routing_kwargs = {"harness_voice": harness_voice} if harness_voice is not None else {}
+    if suppress_auto_fillers:
+        routing_kwargs["suppress_auto_fillers"] = True
 
     vision_hint, vision_image = _take_vision_handoff()
     look_snap = _take_look_snapshot_marker()
@@ -249,7 +252,14 @@ def dispatch_turn(
                     sensing_msg = f"{sensing_msg}\n[transcript] {final_msg}"
             else:
                 sensing_msg = final_msg
-            if sensing_msg and rt.transcript.strip():
+            if sensing_msg and rt.transcript.strip() and getattr(rt, "answered_for_main", False):
+                sensing_msg += (
+                    "\n[realtime-handoff] Realtime answered this aloud while you were "
+                    "waiting for the user's reply to your question. If it answers your "
+                    "question, continue your task without repeating what was said; if "
+                    "it is unrelated and realtime's reply was enough, reply NO_REPLY."
+                )
+            elif sensing_msg and rt.transcript.strip():
                 sensing_msg += (
                     "\n[realtime-handoff] Realtime spoke before handing off, but "
                     "did not confirm a completed answer for this turn. This is "

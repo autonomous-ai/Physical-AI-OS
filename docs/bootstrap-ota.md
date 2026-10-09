@@ -1,5 +1,18 @@
 # Bootstrap & OTA System
 
+## Update progress snapshots
+
+`software-update` atomically writes `/root/bootstrap/progress/<component>.json` for each accepted install (not manual rollback/recovery commands). The latest run survives frontend refresh and service restarts. Fields are `target`, `run_id`, `phase`, `pid`, `boot_id`, `updated_at` (Unix seconds), `downloaded_bytes`, `total_bytes`, and a short `message`. Writes are best effort and never change installer or rollback success.
+
+Phases are preparing, downloading, verifying, installing, restarting, checking, completed, failed, and rolling_back. `completed` is emitted only when the existing updater exits successfully after its component-specific validation; runtime installers do not all perform a gateway health probe. A pending rollback journal always makes the attempted update fail, even if recovery succeeds. A snapshot older than 30 seconds whose updater PID is gone (or boot ID changed) is exposed as `interrupted`, not success.
+
+Downloads through `download_verified` sample bytes written once per second and use Content-Length from the final HTTP 200 response. Redirect sizes, missing length, chunked transfers and inconsistent totals never produce a percentage. Checksum verification precedes installation. Package-manager/upstream installer steps expose phase only, without invented overall percentages. Progress tracking does not include manual rollback/recovery runs or downloads inside third-party installers.
+
+HAL installation additionally reports extraction, activation, and recognized `uv` activity: package download/build/install names and resolved/prepared/installed/audited counts. Optional `activity_at` is the Unix timestamp of the latest recognized activity (zero or absent otherwise). Only recognized names/counts reach the UI; raw output stays in installer logs. Activity writes are throttled to once per second plus the final observation. Unknown output falls back to the installation stage, and tracking preserves the `uv` exit code. Dependency activity is not a byte-based or overall installation percentage.
+
+`GET /api/system/ota-updating` retains `data.updating` and adds `data.progress` (component map, including the selected `agent` alias) and `data.bootstrap_available`. OS Server reads local snapshots even when bootstrap is unreachable; OS Server itself restarting still temporarily interrupts the API. The updater, OS Server and frontend must all be updated to expose the detailed view. Older workers remain supported via the updating list.
+
+
 Lamp device rootfs updates include an Orange Pi-only post-HAL LED blackout
 service (5-second delay). Device OTA reloads systemd after applying the overlay
 and after restoring a rollback, before restarting services; setup also reloads

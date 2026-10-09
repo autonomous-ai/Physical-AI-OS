@@ -45,6 +45,8 @@ if _sensing_device_env:
         AUDIO_SENSING_DEVICE = _sensing_device_env
 # 1.0 = normal, max 4.0.
 TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.2"))
+# Physical sleep gesture: allow the announcement to play before sleepy mutes audio.
+SLEEP_ANNOUNCEMENT_DELAY_S = max(0.0, float(os.environ.get("HAL_SLEEP_ANNOUNCEMENT_DELAY_S", "2.0")))
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "nova")
 TTS_INSTRUCTIONS: str = os.environ.get("HAL_TTS_INSTRUCTIONS", "Friendly")
 # ElevenLabs WebSocket stream-input instead of HTTP chunked streaming.
@@ -544,12 +546,21 @@ def _rt_enabled() -> bool:
 
 REALTIME_ENABLED: bool = _rt_enabled()
 REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | gptlive | pipecat_v1
-# Gate realtime turns on an STT interim starting with a wake phrase.
-WAKEWORD_ENABLED: bool = _os_cfg_get("wakeword", False) is True
+# Manual device input is independent of the saved automatic-mode wake setting.
+VOICE_INPUT_MODE: str = (
+    "tap_to_talk" if _os_cfg_get("voice_input_mode", "automatic") == "tap_to_talk"
+    else "automatic"
+)
+# No wake opener or follow-up window can arm manual device input.
+WAKEWORD_ENABLED: bool = VOICE_INPUT_MODE == "automatic" and _os_cfg_get("wakeword", False) is True
 # 0 requires the wake phrase for every mic session.
 WAKEWORD_FOLLOWUP_TIMEOUT_S: float = max(
     0.0, float(os.environ.get("HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S", "20"))
 )
+# Package opt-in: automatic follow-ups stay visually responsive without unsolicited audio.
+VOICE_OPENING_FILLERS_ONLY: bool = os.environ.get(
+    "HAL_VOICE_OPENING_FILLERS_ONLY", "false"
+).lower() in ("1", "true", "yes")
 # Max gap between output events before the turn falls back (keep just above first-token latency).
 REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
@@ -609,6 +620,11 @@ REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT: bool = os.environ.get(
 REALTIME_NOISE_SPEECH_RATIO: float = float(
     os.environ.get("HAL_REALTIME_NOISE_SPEECH_RATIO", "0.55")
 )
+# Cumulative voiced time, not span length or elapsed recording time. Zero keeps
+# legacy ratio-only behavior until a device has been acoustically calibrated.
+VOICE_NOISE_MIN_VOICED_MS: float = max(0.0, float(
+    os.environ.get("HAL_VOICE_NOISE_MIN_VOICED_MS", "0")
+))
 # Never commit an empty-STT turn (Gemini invents a reply); false uses the Silero gate instead.
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"
@@ -635,8 +651,9 @@ REALTIME_NONACTIONABLE_FILLERS: frozenset[str] = frozenset(
 REALTIME_FOREIGN_SCRIPT_GUARD: bool = os.environ.get(
     "HAL_REALTIME_FOREIGN_SCRIPT_GUARD", "true"
 ).lower() in ("1", "true", "yes")
-# Live (full-duplex) mode is a whole-process choice: it forces REALTIME_TURN_DETECTION.
-LIVE_MODE: bool = os.environ.get("HAL_LIVE_MODE", "false").lower() in (
+# Tap-to-talk owns the turn boundary. Keep the environment preference intact so
+# switching back to automatic input restores full-duplex mode on HAL restart.
+LIVE_MODE: bool = VOICE_INPUT_MODE == "automatic" and os.environ.get("HAL_LIVE_MODE", "false").lower() in (
     "1",
     "true",
     "yes",
@@ -657,7 +674,9 @@ LIVE_VAD_SILENCE_MS: int = int(os.environ.get("HAL_LIVE_VAD_SILENCE_MS", "0"))
 
 # "server_vad" | "semantic_vad" | "off"
 REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "off")
-if LIVE_MODE and REALTIME_TURN_DETECTION.strip().lower() in ("off", "none", ""):
+if VOICE_INPUT_MODE == "tap_to_talk":
+    REALTIME_TURN_DETECTION = "off"
+elif LIVE_MODE and REALTIME_TURN_DETECTION.strip().lower() in ("off", "none", ""):
     REALTIME_TURN_DETECTION = "server_vad"
 
 # Play the model's own audio for realtime-handled turns instead of our TTS.
@@ -1030,6 +1049,11 @@ REALTIME_SUMMARY_KEEP_RECENT_TURNS: int = int(
 )
 # Drop stale `## Open requests` before re-feeding the summary (#419, #421). 0 disables.
 REALTIME_SUMMARY_OPEN_REQUEST_TTL_S: int = int(os.environ.get("HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S", "3600"))
+# After a heard main-agent question, the user's next actionable answer belongs to
+# main: realtime is told to delegate it and a self-answered turn is forwarded as a
+# live handoff (#564). Safety cap in seconds; the answer itself closes it. 60 s was
+# too short on device (a name came 64 s later). 0 disables.
+REALTIME_MAIN_FOLLOWUP_S: float = float(os.environ.get("HAL_REALTIME_MAIN_FOLLOWUP_S", "300"))
 # Cap on the agent-writable identity section of the floor.
 REALTIME_IDENTITY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_IDENTITY_MAX_CHARS", "12000"))
 # Cap on the [REPLY] transcript replayed to the main agent.
@@ -1114,6 +1138,12 @@ GAZE_REPOINT_VERIFY_S: float = float(
 # before giving its verdict (#545). The climb budget is 4 steps x 4 s cooldown.
 GAZE_REPOINT_CLIMB_TIMEOUT_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S", "20")
+)
+# A person box at least this much of the frame is someone at the desk (#567). With no
+# face it withholds a repoint miss; it never confirms one. Device-measured 2026-10-05:
+# seated users 26-73% of the frame, co-workers and passers-by at most 13%.
+GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC", "0.20")
 )
 
 # Vertical centring via wrist_pitch (the neck); decreasing the joint tilts the camera UP.
