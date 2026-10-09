@@ -171,6 +171,22 @@ ngày 2026-09-11, xác minh startup thành công. Chờ live test cử chỉ.
 Xem [điều khiển vật lý](../../robots/lamp/docs/vi/physical-controls_vi.md) để
 biết cấu hình và chi tiết cử chỉ.
 
+Ngưỡng quá tải servo cũng do device quản lý, trong `robots/lamp/servo_overload.json`
+(map `boards`: `load`, `hold_s`, `retry_s`, cùng `enabled`, `contact` và `torque_limit`
+tùy chọn), đọc bởi `hal/board/servo_overload.py`. Khớp được theo dõi ở mức sàn
+`contact.load` của nó trở lên trong `contact.hold_s` làm driver feetech dừng tại chỗ
+(torque vẫn bật), phát chime "uh-oh" riêng và đứng yên trong `contact.pause_s` rồi mới chạy tiếp vào
+idle. Khớp nào ở mức `load` trở lên trong `hold_s` sẽ cắt torque mọi servo, phát ack chime và
+từ chối chuyển động trong `retry_s` rồi mới resume. `torque_limit` giới hạn lực đẩy tối đa
+của một khớp. Không có file, không có entry board hoặc `enabled: false` nghĩa là không có
+cơ chế nào trong số này, còn file sai định dạng bị từ chối khi startup. Lamp theo dõi
+`base_yaw` 55 %, `wrist_roll` 75 %, `wrist_pitch` 65 % trong 0.05 s với pause 3 s, và
+khi một recording chạy thì mọi khớp bị giữ trong envelope đã học theo từng frame + 12 %
+load hoặc + 3,5° lag (`contact.profile_margin`, `contact.lag_margin`, học riêng từng máy
+bằng `POST /servo/contact/learn`), quay nhìn theo gaze, tracking và giữ tư thế dùng sàn
+load/lag của `contact.off_playback`, giới hạn `base_yaw`, `base_pitch` và `elbow_pitch` ở
+60 % torque, và giữ cut-off ở 80 % / 1.5 s / 120 s (đo trên lamp-52e6). Xem phần fail-safe của [an toàn](safety_vi.md).
+
 ## Nguyên Tắc
 
 - **Hardware là plugin** — cắm vào thì play, không cắm thì skip

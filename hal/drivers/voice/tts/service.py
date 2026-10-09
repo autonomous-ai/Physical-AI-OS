@@ -2184,6 +2184,26 @@ class TTSService:
         """Head-pet feedback through the shared mute, gain and AEC path."""
         return self._play_gesture_chime(self._pet_chime_samples)
 
+    def _contact_chime_samples(self, rate: int):
+        """Soft falling "uh-oh" (G5 then E5, 90 ms each): the arm bumped into something.
+
+        Two rounded notes a minor third apart read as a small surprise, not an alarm,
+        and stay distinct from the high acknowledgment ping.
+        """
+        np = self._np
+        t = np.arange(int(rate * 0.09)) / rate
+        envelope = np.sin(np.pi * np.arange(len(t)) / max(1, len(t) - 1)) ** 2
+        notes = [
+            0.3 * envelope * (np.sin(2 * np.pi * f * t) + 0.2 * np.sin(4 * np.pi * f * t))
+            for f in (783.99, 659.25)
+        ]
+        gap = np.zeros(int(rate * 0.03))
+        return np.concatenate((notes[0], gap, notes[1])).astype(np.float32).reshape(-1, 1)
+
+    def play_contact_chime(self) -> bool:
+        """Contact-stop cue: the moving arm hit something and halted."""
+        return self._play_gesture_chime(self._contact_chime_samples)
+
     def play_harness_capture_chime(self, *, finished: bool = False) -> bool:
         """Dedicated rising/falling pair for Harness capture, not delivery receipt."""
         return self._play_gesture_chime(
