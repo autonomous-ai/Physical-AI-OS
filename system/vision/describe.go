@@ -31,7 +31,17 @@ const DescribeTimeout = 80 * time.Second
 
 // Per-attempt timeouts summing to DescribeTimeout; text-dense images measured
 // at 23-38s, so each attempt must stay above that.
-var describeAttemptTimeouts = [...]time.Duration{45 * time.Second, 35 * time.Second}
+var describeAttemptTimeouts = []time.Duration{45 * time.Second, 35 * time.Second}
+
+// Camera looks are a live voice turn, so they make one attempt and let the agent
+// say it could not see instead of going silent for 80 s. A retry does not help:
+// when the gateway is slow the retry is just as slow. Measured on the lamp, a
+// plain look (thinking off) took 3-5 s on a good day and 10-20 s on a slow one;
+// a read_text look (thinking on) 8-16 s, with outliers past 45 s.
+var (
+	lookAttemptTimeouts     = []time.Duration{30 * time.Second}
+	lookReadAttemptTimeouts = []time.Duration{45 * time.Second}
+)
 
 // describeMaxTokens must cover reasoning plus the description; measured output
 // ranged 868-1677 tokens, and overruns return empty content.
@@ -134,7 +144,7 @@ func (e errBudget) Error() string {
 // background context (so it outlives an early HAL disconnect). A budget
 // overrun is not retried since the identical retry would fail identically.
 func DescribeWithRetry(cfg *config.Config, imageB64 string, question string) (string, error) {
-	return withRetry(func(ctx context.Context) (string, error) {
+	return withRetry(describeAttemptTimeouts, func(ctx context.Context) (string, error) {
 		return Describe(ctx, cfg, imageB64, question)
 	})
 }
@@ -146,14 +156,18 @@ func LookWithRetry(cfg *config.Config, imageB64 string, question string, readTex
 	if len(question) > 500 {
 		question = question[:500]
 	}
-	return withRetry(func(ctx context.Context) (string, error) {
+	timeouts := lookAttemptTimeouts
+	if readText {
+		timeouts = lookReadAttemptTimeouts
+	}
+	return withRetry(timeouts, func(ctx context.Context) (string, error) {
 		return describeImage(ctx, cfg, imageB64, fmt.Sprintf(lookPrompt, question), "", readText)
 	})
 }
 
-func withRetry(describe func(context.Context) (string, error)) (string, error) {
+func withRetry(timeouts []time.Duration, describe func(context.Context) (string, error)) (string, error) {
 	var errs []string
-	for i, timeout := range describeAttemptTimeouts {
+	for i, timeout := range timeouts {
 		dctx, cancel := context.WithTimeout(context.Background(), timeout)
 		desc, err := describe(dctx)
 		cancel()

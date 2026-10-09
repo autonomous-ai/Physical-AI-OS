@@ -78,6 +78,10 @@ class SoundPerception(Perception[Any]):
         self._window_start: float = 0.0
         self._last_passed: float = 0.0
         self._suppress_until: float = 0.0
+        # Habituation: after one persistent (shock) reaction, stay quiet while the same
+        # noise goes on. Cleared only by _WINDOW_DURATION_S of quiet.
+        self._habituated: bool = False
+        self._last_heard: float = 0.0
         self._last_rms: float = 0.0
         self._last_rms_ts: float = 0.0
 
@@ -112,6 +116,12 @@ class SoundPerception(Perception[Any]):
 
     def _track(self, now: float) -> tuple[bool, int, bool]:
         """Returns (send, occurrence, persistent)."""
+        if self._habituated:
+            quiet_s = now - self._last_heard
+            self._last_heard = now
+            if quiet_s < _WINDOW_DURATION_S:
+                return False, 0, False
+            self._habituated = False
         if now < self._suppress_until:
             return False, 0, False
 
@@ -131,6 +141,8 @@ class SoundPerception(Perception[Any]):
         persistent = current >= _PERSISTENT_AFTER
         if persistent:
             self._suppress_until = now + _SUPPRESS_DURATION_S
+            self._habituated = True
+            self._last_heard = now
             self._count = 0
             self._window_start = 0.0
 
