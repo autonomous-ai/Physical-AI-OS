@@ -120,3 +120,36 @@ func TestLookDisablesThinkingUnlessReadingText(t *testing.T) {
 		}
 	}
 }
+
+func TestLookFailsFastOnASlowVisionModel(t *testing.T) {
+	seedDesktopTestCatalog(t)
+	prevPlain, prevRead := lookAttemptTimeouts, lookReadAttemptTimeouts
+	lookAttemptTimeouts = []time.Duration{50 * time.Millisecond}
+	lookReadAttemptTimeouts = []time.Duration{50 * time.Millisecond}
+	t.Cleanup(func() { lookAttemptTimeouts, lookReadAttemptTimeouts = prevPlain, prevRead })
+	calls := make(chan struct{}, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls <- struct{}{}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer server.Close()
+	cfg := &config.Config{LLMBaseURL: server.URL + "/v1", LLMAPIKey: "test-key"}
+	for readText, attempts := range map[bool]int{false: 1, true: 1} {
+		start := time.Now()
+		if _, err := LookWithRetry(cfg, "jpeg-base64", "What is this?", readText); err == nil {
+			t.Fatalf("readText=%v: slow model must fail", readText)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("readText=%v: waited %s", readText, elapsed)
+		}
+		if got := len(calls); got != attempts {
+			t.Fatalf("readText=%v: %d attempts, want %d", readText, got, attempts)
+		}
+		for len(calls) > 0 {
+			<-calls
+		}
+	}
+}
