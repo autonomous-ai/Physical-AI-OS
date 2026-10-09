@@ -456,6 +456,12 @@ class ServoDemoResponse(BaseModel):
     reason: str = ""
 
 
+class ServoHoldOwnerRequest(BaseModel):
+    owner: Literal["look"] = Field(
+        ..., description="Internal hold owner. Only os-server's look sequence uses it; agents call /servo/hold."
+    )
+
+
 class ServoAimRequest(BaseModel):
     direction: str = Field(
         ...,
@@ -681,6 +687,13 @@ class ServoTrackRequest(BaseModel):
             "of candidate labels (e.g. ['cup', 'mug', 'coffee cup']) when the caller "
             "is unsure of the exact word — YOLOWorld evaluates all candidates and "
             "the highest-confidence detection is used."
+        ),
+    )
+    max_duration_s: Optional[float] = Field(
+        None, gt=0,
+        description=(
+            "Stop after this many seconds. Capped at HAL_TRACKING_MAX_DURATION_S; "
+            "omitted means that cap. A greeting look uses a short value, not a stare."
         ),
     )
 

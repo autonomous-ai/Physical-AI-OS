@@ -57,6 +57,9 @@ class TrackingState:
 class TrackerService:
     """Manages a single object-tracking session with gimbal-style servo follow."""
 
+    # The session cap start() sets; the class default covers a service never started.
+    _max_duration_s: float = C.MAX_TRACK_DURATION_S
+
     def __init__(self):
         self._state = TrackingState()
         self._lock = threading.Lock()
@@ -101,8 +104,11 @@ class TrackerService:
         target_label="",
         camera_capture=None,
         animation_service=None,
+        max_duration_s: Optional[float] = None,
     ) -> bool:
-        """Start tracking an object."""
+        """Start tracking an object. `max_duration_s` shortens, never extends, the cap."""
+        self._max_duration_s = (min(float(max_duration_s), C.MAX_TRACK_DURATION_S)
+                                if max_duration_s else C.MAX_TRACK_DURATION_S)
         if camera_capture is None or animation_service is None:
             self.last_error = "camera or animation service not available"
             logger.error("tracker start: %s", self.last_error)
@@ -426,8 +432,8 @@ class TrackerService:
 
                 # This is a wall-clock session limit. Check before reading the
                 # frame so a stalled camera cannot keep tracking alive forever.
-                if time.perf_counter() - track_start_t > C.MAX_TRACK_DURATION_S:
-                    logger.warning("Tracking timeout after %ds, stopping", C.MAX_TRACK_DURATION_S)
+                if time.perf_counter() - track_start_t > self._max_duration_s:
+                    logger.warning("Tracking timeout after %.0fs, stopping", self._max_duration_s)
                     break
 
                 frame = camera_capture.last_frame

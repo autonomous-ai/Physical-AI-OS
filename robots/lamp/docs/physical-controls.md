@@ -217,8 +217,8 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_WAKE_FOCUS_S` | 10 | Follow-up window a *gaze* wake requests. Capped by `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, so the lamp packaged `.env` limits it to 5 s as well. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Minimum gap between gaze-opened gates, so one conversation cannot open one per sentence. |
 | `HAL_GAZE_REPOINT` | `true` | Turn toward the remembered bearing when nobody has been visible. |
-| `HAL_GAZE_REPOINT_AFTER_S` | 12 | How long nobody must be visible first. A voice-triggered empty-evidence recovery bypasses this delay, but not the movement cooldown. |
-| `HAL_GAZE_REPOINT_COOLDOWN_S` | 60 | At most one turn per this interval, including a voice-triggered recovery. |
+| `HAL_GAZE_REPOINT_AFTER_S` | 12 | How long nobody must be visible first. A voice-triggered empty-evidence recovery bypasses this delay. |
+| `HAL_GAZE_REPOINT_COOLDOWN_S` | 60 | At most one automatic turn per this interval. A voice-triggered recovery bypasses it (a second sentence gets a second look) unless the last repoint found nobody: chatter toward an empty bearing gets one turn, then waits this out. |
 | `HAL_GAZE_REPOINT_MIN_CONFIDENCE` | 0.2 | Bearing confidence below which turning is not worth it. Matched to look-aim's own threshold: at 0.5 the watcher refused bearings the aim and the search were happily using — a bearing good enough to point a live conversational turn at is good enough to turn the head toward between them. |
 | `HAL_GAZE_REPOINT_SKIP_IF_FACE_S` | 3 | Decline a speech-triggered reacquire when a face was seen this recently. After the climb has found the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody. |
 | `HAL_GAZE_WELL_FRAMED_EDGE` | 0.6 | How far off frame centre a face may sit and still count as "somebody is here, no need to turn". A face at the very edge is about to leave frame; treating it as well framed let the absence timer reset forever while the user drifted out of view — measured at edge 0.71–0.75 with the lamp still refusing to repoint. |

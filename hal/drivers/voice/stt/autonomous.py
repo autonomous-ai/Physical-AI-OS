@@ -14,8 +14,8 @@ from hal.drivers.voice.tts.openai import _ensure_openai_v1
 logger = logging.getLogger("hal.voice.stt")
 logger.setLevel(logging.INFO)
 
-DEFAULT_MODEL = "flux-general-en"
-DEFAULT_LANGUAGE = None
+DEFAULT_MODEL = "nova-3-general"
+DEFAULT_LANGUAGE = "en"
 
 DEFAULT_ENCODING = "linear16"
 DEFAULT_ENDPOINTING_MS = 1500

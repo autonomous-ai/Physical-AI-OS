@@ -182,7 +182,9 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 
 Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportional chết `GIMBAL_*` / `EMA_ALPHA` đã bị xoá khi tách package.)
 
-Đặt `HAL_TRACKING_MAX_DURATION_S` trong `/opt/hal/.env` của Lamp để chọn giới hạn thời gian thực cho một session; mặc định Lamp đã cài là `10`. Khởi động lại service `hal` sau khi đổi.
+Đặt `HAL_TRACKING_MAX_DURATION_S` trong `/opt/hal/.env` của Lamp để chọn giới hạn thời gian thực cho một session; mặc định Lamp đã cài là `10`. Khởi động lại service `hal` sau khi đổi. Một lần gọi `/servo/track` có thể truyền `max_duration_s` để
+dừng sớm hơn (không bao giờ quá giới hạn này): cái nhìn khi chào trong sensing skill dùng `3`, vì đèn
+chào xong mà bám chặt một khuôn mặt 10 giây thì giống camera theo dõi, không giống một cái nhìn nhận ra.
 
 ### Giới hạn vị trí servo
 
@@ -520,7 +522,9 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   pha quét thậm chí không hiện ra trong Monitor. Agent chờ body rồi trả lời dựa trên đó, đúng theo
   cách `/api/vision/look` vẫn đang làm.
 - họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
-- **look-aim sắp bỏ cuộc** — trước khi `look_lost` tuyên bố *"Tôi không tìm thấy bạn"*, câu mà đến giờ
+- **look-aim sắp bỏ cuộc** — nhưng chỉ là một cái **liếc** (`glance=True`, 2 lần nhìn tại bearing,
+  không có `look_still_searching`), không phải pha quét đầy đủ: được nhờ nhìn mà không thấy ai thì
+  một sinh vật liếc quanh, không quét cả phòng. Trước khi `look_lost` tuyên bố *"Tôi không tìm thấy bạn"*, câu mà đến giờ
   nó vẫn nói sau khi mới chỉ quay về một bearing đã ghi nhớ. Bearing là phỏng đoán về nơi người ta
   *từng* ở, không phải một lần tìm, nên câu đó phải được xứng đáng. Hạn chót của pha ngắm **ngừng đếm**
   trong suốt thời gian quét (`t_end += time.monotonic() - swept_at` trong `aim_for_look`): hạn chót tồn
@@ -601,7 +605,7 @@ quanh của gaze watcher) đi theo `USER_LOOK_CIRCLE`: vẫn sáu lần nhìn đ
 tâm, trái, vòng qua **đỉnh**, ra phải. Khuôn mặt nằm ngang hoặc cao hơn góc nhìn lúc ngồi mà pha quét
 bắt đầu từ đó; các lần nhìn đáy chỉ vào bàn và bàn phím. Đo trên green-lamp 30/09/2026: một user đang
 đứng, đầu cao hơn mọi lần nhìn, đã bị bỏ sót qua cả 18 lần nhìn. Tìm đồ vật (`POST /servo/search`,
-"tìm đồ của tôi") và pha quét dự phòng của look-aim vẫn giữ vòng nhìn xuống, nơi có đồ trên bàn. Các
+"tìm đồ của tôi") vẫn giữ vòng nhìn xuống, nơi có đồ trên bàn. Các
 lần nhìn lên dùng chung giới hạn `WRIST_PITCH_MIN` mô tả bên dưới.
 
 **Chỉ `wrist_roll` và `wrist_pitch` di chuyển trong một lần nhìn.** Đế chỉ xoay một lần cho mỗi bearing
@@ -633,7 +637,8 @@ góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà 
 
 **Khi gaze watcher tự quét, nó tìm user chứ không tìm bất kỳ ai (#545).** `gaze._maybe_sweep`
 gọi `search_for_subject(for_user=True, glance=True)`. Mọi nơi gọi khác giữ nguyên hành vi hiện tại:
-`POST /servo/search` (đồ vật, `exhaustive`) và pha quét dự phòng riêng của look-aim. Ở mỗi lần nhìn,
+`POST /servo/search` (đồ vật, `exhaustive`); pha dự phòng của look-aim cũng chỉ là cái liếc, nhưng
+không có user check. Ở mỗi lần nhìn,
 nó quan sát các khuôn mặt trong khung khoảng 1.5 s (`user_check.observe_faces`, 6 frame; bỏ qua bước
 chờ này khi frame đầu không có mặt nào) và chỉ dừng ở một cái mặt qua được
 `user_check.adopts_bearing`: cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình,
@@ -713,16 +718,17 @@ os-server sở hữu các câu, phần phân giải ngôn ngữ và cache WAV (`
 |---|---|---|
 | `look_searching` | bước đầu tiên về phía bearing đã ghi nhớ | **bật** (`HAL_LOOK_AIM_SPEAK`) |
 | `look_found` | có người xuất hiện **sau khi** đã thông báo đang tìm | bật (cùng cờ) |
-| `look_still_searching` | điểm giữa của pha quét — điểm dừng 2/3, đầu ở giữa (`_say_at_the_midpoint`) | bật (`HAL_LOOK_AIM_SPEAK`) |
+| `look_still_searching` | điểm giữa của pha quét đầy đủ (`/servo/search`) — điểm dừng 2/3, đầu ở giữa (`_say_at_the_midpoint`). Không bao giờ phát trong cái liếc của look-aim | bật (`HAL_LOOK_AIM_SPEAK`) |
 | `look_capturing` | pha ngắm thực sự đã di chuyển trước khi bấm máy | bật (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
 
 Phần chặn quan trọng hơn bản thân các câu nói. **Không nói gì khi đối tượng đã nằm giữa sẵn** — lần chụp
 đó xong trong vài trăm mili giây, nên mọi câu ở đây đều có điều kiện là pha ngắm thực sự đã phải di
 chuyển. *"Bạn đây rồi"* chỉ phát ra như phần kết của một lần tìm đã được thông báo, không bao giờ đứng
 một mình. Trạng thái đang tìm chỉ thông báo **một lần** mỗi pha quét chứ không phải mỗi bước, cộng
-thêm đúng một câu `look_still_searching` ở điểm giữa — pha quét dài ~20 s, và không có câu đó thì câu
-mở đầu và câu kết luận nằm hai bên một khoảng lặng hai mươi giây, nghe như một cái đèn đã đứng máy chứ
-không phải một cái đèn đang tìm. Còn câu lúc chụp chỉ phát khi pha ngắm thực sự đã di chuyển
+thêm đúng một câu `look_still_searching` ở điểm giữa của pha quét đầy đủ — pha đó dài ~20 s, và không
+có câu đó thì câu mở đầu và câu kết luận nằm hai bên một khoảng lặng hai mươi giây, nghe như một cái đèn
+đã đứng máy chứ không phải một cái đèn đang tìm. Cái liếc của look-aim chỉ ~4 s và không nói gì ở giữa:
+kể lể một cái liếc ngắn là kiểu máy báo trạng thái. Còn câu lúc chụp chỉ phát khi pha ngắm thực sự đã di chuyển
 (`res.aimed and res.iterations > 0`): pha ngắm không động gì thì không nói gì, và — phần đã sai cho tới
 nhánh này — pha ngắm đã tìm rồi **thất bại** cũng không nói gì, trước đây nó nối ngay
 *"Tôi không tìm thấy bạn"* với *"Để tôi nhìn thử"*.
@@ -1001,8 +1007,7 @@ qua `GLANCE_LOOKS` — đầu liếc trái 45°, rồi phải 45° — tức 2 l
 `look_still_searching`. Xong thì về lại tư thế ban đầu và thôi. Nguyên tắc là *một sinh vật có làm vậy
 không?*: quay về phía tiếng gọi mà không thấy ai thì liếc quanh một chút; không ai đi quét phòng
 3 hướng × 6 lần nhìn như camera an ninh — đó chính là cảm giác khi pha quét đủ 18 lần nhìn tự chạy
-mà không ai yêu cầu. Pha quét đầy đủ chỉ còn cho lúc có người yêu cầu tìm (`/servo/search`, pha quét
-dự phòng của look-aim). Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
+mà không ai yêu cầu. Pha quét đầy đủ chỉ còn cho lúc có người yêu cầu tìm (`/servo/search`). Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
 đã nói mà nó không tìm ra họ, chứ không bao giờ vì một căn phòng trông có vẻ trống. Cò kích hoạt theo
 vắng mặt (`HAL_GAZE_SWEEP_AFTER_S`) vẫn còn trong `_maybe_sweep` nhưng không còn gì với tới nó — vòng
 lặp watcher không còn gọi pha quét nữa. Các cooldown vẫn áp dụng, và có tới hai vì hai tình huống không

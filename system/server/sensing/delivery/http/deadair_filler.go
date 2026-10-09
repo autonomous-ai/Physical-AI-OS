@@ -314,6 +314,10 @@ type FillerManager struct {
 	// after the device agent finishes. Keep only a bounded set of recent runs.
 	suppressed      map[string]bool
 	suppressedOrder []string
+	// cueRuns are suppressed voice turns that started: no automatic filler, but
+	// SayInVoiceRun may still announce an action the agent chose. The value is
+	// true while the reply streams.
+	cueRuns map[string]bool
 }
 
 // NewFillerManager constructs an empty FillerManager. Language is read at
@@ -325,6 +329,7 @@ func NewFillerManager() *FillerManager {
 		delegated:    make(map[string]bool),
 		interactions: make(map[string]string),
 		suppressed:   make(map[string]bool),
+		cueRuns:      make(map[string]bool),
 	}
 }
 
@@ -399,12 +404,21 @@ func fillerOwner(interactionID, runID string) string {
 // air gets filled even when the agent thinks without invoking any tool (no
 // tool.end -> no OnToolEnd re-arm without this).
 func (fm *FillerManager) OnTurnStart(runID string) {
-	if runID == "" || fillersDisabled() {
+	if runID == "" {
 		return
 	}
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
-	if !fm.voiceRuns[runID] || fm.Superseded(runID) {
+	if fm.Superseded(runID) {
+		return
+	}
+	if fm.suppressed[runID] {
+		if _, ok := fm.cueRuns[runID]; !ok {
+			fm.cueRuns[runID] = false
+		}
+		return
+	}
+	if fillersDisabled() || !fm.voiceRuns[runID] {
 		return
 	}
 	delete(fm.voiceRuns, runID)
@@ -431,6 +445,10 @@ func (fm *FillerManager) OnToolStart(runID, toolArgs, toolName string) {
 	}
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
+	if _, ok := fm.cueRuns[runID]; ok {
+		fm.cueRuns[runID] = false
+		return
+	}
 	run, ok := fm.runs[runID]
 	if !ok || run.ended {
 		slog.Debug("filler OnToolStart skipped — no active run", "component", "sensing", "run_id", runID, "tool", toolName)
@@ -496,6 +514,10 @@ func fillerRearmDelay(run *fillerRun) time.Duration {
 func (fm *FillerManager) OnAssistantText(runID string) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
+	if _, ok := fm.cueRuns[runID]; ok {
+		fm.cueRuns[runID] = true
+		return
+	}
 	run, ok := fm.runs[runID]
 	if !ok || run.ended || run.suspended {
 		return
@@ -519,6 +541,7 @@ func (fm *FillerManager) cancel(runID string, stopPlayback bool) {
 	delete(fm.voiceRuns, runID)
 	delete(fm.delegated, runID)
 	delete(fm.interactions, runID)
+	delete(fm.cueRuns, runID)
 	run, ok := fm.runs[runID]
 	if !ok {
 		fm.mu.Unlock()
@@ -544,7 +567,9 @@ func (fm *FillerManager) cancel(runID string, stopPlayback bool) {
 }
 
 // CancelAllActive hard-cancels every run currently holding filler state, and
-// reports how many there were. Called by the physical cancel gesture.
+// reports how many filler runs there were. It also drops the cue-only suppressed
+// turns, which hold no filler and so are not counted. Called by the physical
+// cancel gesture.
 func (fm *FillerManager) CancelAllActive() int {
 	return fm.cancelMatching(func(string) bool { return true }, true)
 }
@@ -556,6 +581,10 @@ func (fm *FillerManager) cancelMatching(matches func(string) bool, stopPlayback 
 	for runID := range fm.runs {
 		runIDs = append(runIDs, runID)
 	}
+	cueIDs := make([]string, 0, len(fm.cueRuns))
+	for runID := range fm.cueRuns {
+		cueIDs = append(cueIDs, runID)
+	}
 	fm.mu.Unlock()
 	count := 0
 	for _, runID := range runIDs {
@@ -564,39 +593,58 @@ func (fm *FillerManager) cancelMatching(matches func(string) bool, stopPlayback 
 			count++
 		}
 	}
+	// Cue-only suppressed turns hold no filler: dropped, but not counted.
+	for _, runID := range cueIDs {
+		if matches(runID) {
+			fm.cancel(runID, stopPlayback)
+		}
+	}
 	return count
+}
+
+// cueTargetLocked picks the voice turn a cue speaks on: a filler run first, else
+// a suppressed (cue-only) turn, whose run is nil. Caller holds fm.mu.
+func (fm *FillerManager) cueTargetLocked() (string, *fillerRun) {
+	for id, r := range fm.runs {
+		if !r.ended && !r.suspended {
+			return id, r
+		}
+	}
+	for id, streaming := range fm.cueRuns {
+		if !streaming {
+			return id, nil
+		}
+	}
+	return "", nil
 }
 
 // SayInVoiceRun speaks one phrase from pool for the voice turn in progress and
 // pushes that turn's dead-air filler back by its cooldown, so a generic "Hmm..."
 // does not land on top of the cue. It is silent and returns false when no voice
 // turn is running (Telegram, web chat, cron) or the reply is already streaming.
-// The cue does not count toward MaxFillersPerTurn.
+// The cue does not count toward MaxFillersPerTurn. A suppressed voice follow-up
+// (SuppressRun) still gets cues, which announce an action, never automatic fillers.
 func (fm *FillerManager) SayInVoiceRun(pool string) bool {
 	phrases := toolPoolForLang(i18n.Lang(), pool)
 	if len(phrases) == 0 {
 		return false
 	}
 	fm.mu.Lock()
-	var runID string
-	var run *fillerRun
-	for id, r := range fm.runs {
-		if !r.ended && !r.suspended {
-			runID, run = id, r
-			break
-		}
-	}
-	if run == nil {
+	runID, run := fm.cueTargetLocked()
+	if runID == "" {
 		fm.mu.Unlock()
 		return false
 	}
-	if run.timer != nil {
-		run.timer.Stop()
-		run.timer = nil
-		run.generation++
+	// A cue-only turn has no dead-air filler to push back.
+	if run != nil {
+		if run.timer != nil {
+			run.timer.Stop()
+			run.timer = nil
+			run.generation++
+		}
+		run.lastActivityAt = time.Now()
+		fm.armLocked(runID, run, fillerRearmDelay(run))
 	}
-	run.lastActivityAt = time.Now()
-	fm.armLocked(runID, run, fillerRearmDelay(run))
 	owner := fillerOwner(fm.interactions[runID], runID)
 	fm.mu.Unlock()
 

@@ -139,6 +139,7 @@ type bootSnapshot struct {
 	deepgramAPIKey string
 	sttAPIKey      string
 	sttBaseURL     string
+	sttModel       string
 }
 
 func bootFields(c *config.Config) bootSnapshot {
@@ -148,6 +149,7 @@ func bootFields(c *config.Config) bootSnapshot {
 		deepgramAPIKey: c.DeepgramAPIKey,
 		sttAPIKey:      c.STTAPIKey,
 		sttBaseURL:     c.STTBaseURL,
+		sttModel:       c.STTModel,
 	}
 }
 
@@ -680,6 +682,7 @@ func (s *Service) UpdateVoiceConfig(provider, voice, language string, speed *flo
 		return err
 	}
 	prevLang := s.config.STTLanguage
+	prevModel := s.config.STTModel
 	if provider != "" {
 		s.config.TTSProvider = provider
 	}
@@ -707,26 +710,22 @@ func (s *Service) UpdateVoiceConfig(provider, voice, language string, speed *flo
 			}()
 		}
 	}
-	if language != "" && prevLang != s.config.STTLanguage {
+	if language != "" && (prevLang != s.config.STTLanguage || prevModel != s.config.STTModel) {
 		// stt_language is read at boot; nothing can be pushed for it.
-		s.restartHAL("stt language change")
+		s.restartHAL("stt language/model change")
 	} else {
 		s.applyTTSConfig(s.config)
 	}
 	return nil
 }
 
-// sttModelForLanguage maps a BCP-47 code to a Deepgram SKU: English uses Flux,
-// others Nova-3; empty input lets HAL use its default.
+// sttModelForLanguage uses Nova-3 for every selected language, including English.
+// Empty input lets HAL use its default.
 func sttModelForLanguage(lang string) string {
-	switch lang {
-	case "":
+	if lang == "" {
 		return ""
-	case i18n.LangEN:
-		return "flux-general-en"
-	default:
-		return "nova-3-general"
 	}
+	return "nova-3-general"
 }
 
 // RestoreAutonomousDefaults restores one section to the shipped credentials via

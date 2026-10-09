@@ -84,3 +84,22 @@ def test_completed_prefix_preserves_pending_text(text, head, tail):
     from hal.drivers.voice._internal.realtime_turn import split_completed_prefix
     assert split_completed_prefix(text) == (head, tail)
     assert head + tail == text
+
+
+def test_first_chunk_cap_counts_speech_not_control_markers(monkeypatch):
+    monkeypatch.setattr(hal_config, "REALTIME_FIRST_CHUNK_MAX_CHARS", 60)
+    marker = '[HW:/emotion:{"emotion":"caring","intensity":0.7}]'
+    text = marker + ' Here is a quick'
+    assert split_first_chunk(text) == ("", text)
+    head, tail = split_first_chunk(text + ' five-minute routine: take the first minute')
+    assert head == marker + ' Here is a quick five-minute routine:'
+    assert tail == ' take the first minute'
+
+
+def test_tagged_word_fallback_uses_visible_character_budget(monkeypatch):
+    monkeypatch.setattr(hal_config, "REALTIME_FIRST_CHUNK_MAX_CHARS", 25)
+    marker = '[speaking very softly and warmly] '
+    text = marker + 'one two three four five six seven eight nine'
+    head, tail = split_first_chunk(text)
+    assert head == marker + 'one two three four five'
+    assert head + ' ' + tail == text

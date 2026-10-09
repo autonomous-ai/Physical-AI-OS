@@ -335,3 +335,56 @@ def test_stream_failures_preserve_fallback_without_stt_wait(executor, failure):
         realtime.recover_session.assert_called_once_with(
             "device-turn-discarded", discard_old_on_failure=True,
         )
+
+
+@pytest.mark.parametrize("path", ["stream", "buffered", "automatic"])
+def test_manual_realtime_wait_does_not_arm_automatic_filler(executor, monkeypatch, path):
+    from hal.drivers.voice._internal import realtime_turn
+    from hal.realtime.models import TextOutput, TextSegmentEndOutput
+
+    invoke, args, realtime, _, _ = executor
+    monkeypatch.setattr(module, "run_realtime_turn", realtime_turn.run_realtime_turn)
+    monkeypatch.setattr(module, "build_turn_context", lambda *unused: "test context")
+    monkeypatch.setattr(module.config, "REALTIME_PROVIDER", "openai")
+    monkeypatch.setattr(module.config, "REALTIME_NATIVE_AUDIO", False)
+    monkeypatch.setattr(realtime_turn, "native_voice", lambda tts: None)
+    monkeypatch.setattr(realtime_turn, "pending_main_question", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_start", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_clear", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
+    filler = Mock()
+    monkeypatch.setattr(realtime_turn, "_WaitFiller", Mock(return_value=filler))
+    args["combined"] = "Please explain how the weather changes during the day."
+    armed_while_waiting = []
+
+    def output(*unused, **kwargs):
+        # Observe before any provider output cancels the wait timer.
+        armed_while_waiting.append(filler.arm.call_count)
+        yield TextOutput(text="Here is the answer.")
+        yield TextSegmentEndOutput()
+
+    realtime.stream_output.side_effect = output
+    if path == "stream":
+        metadata = {"combined": args["combined"], "duration": args["duration"],
+                    "speech": True, "interaction_id": args["interaction_id"]}
+        result = invoke.stream(iter(args["audio"]), snapshot=lambda: metadata,
+                               cancelled=args["cancelled"], valid=args["valid"])
+    elif path == "buffered":
+        result = invoke(**args)
+    else:
+        result = realtime_turn.run_realtime_turn(
+            realtime, invoke._get_tts(), lambda text: text, args["combined"],
+            [np.ones(480, dtype=np.float32)], 2.0,
+            interaction_id=args["interaction_id"], harness_followup=False,
+        )
+    assert result.handled
+    assert armed_while_waiting == [int(path == "automatic")]
+
+
+def test_buffered_manual_audio_reaches_realtime_without_stt(executor, monkeypatch):
+    invoke, args, realtime, runner, result = executor
+    monkeypatch.setattr(module.config, "REALTIME_REQUIRE_TRANSCRIPT", True)
+    args["combined"] = ""
+    assert invoke(**args) is result
+    realtime.append_audio.assert_called()
+    assert runner.call_args.kwargs["explicit_capture"] is True
