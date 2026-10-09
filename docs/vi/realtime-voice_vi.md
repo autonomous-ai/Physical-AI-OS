@@ -3298,6 +3298,45 @@ file (thay vì chỉ tập field HAL đọc) giữ tín hiệu tự-bảo-trì k
 thay đổi; cái giá duy nhất là một lần restart HAL thừa ở boot kế tiếp khi sửa field
 chỉ-thuộc-os-server.
 
+### STT đa ngôn ngữ (nhận dạng ngôn ngữ nói)
+
+Mặc định tắt. Bật khi `config.json` liệt kê từ hai ngôn ngữ được hỗ trợ trở lên
+trong `stt_languages` (ví dụ `["en", "ja"]`) và model AmberNet ONNX có ở
+`HAL_LANG_ID_MODEL_PATH` (mặc định: model fp32
+`hal/drivers/voice/resources/ambernet.onnx`, labels `ambernet.labels.json`
+cùng thư mục, đổi được bằng `HAL_LANG_ID_LABELS_PATH`). Chưa có setting trên web hay API; sửa `config.json`
+rồi restart HAL. `stt_language` vẫn là ngôn ngữ chính. Provider Deepgram giờ cũng
+nhận `stt_language` và model tương ứng (trước đây luôn chạy English).
+
+`runtime.py` bọc STT provider bằng `LanguageSwitchingSTT`
+(`hal/drivers/voice/stt/lang_switch.py`):
+
+1. Session STT của mỗi lượt mở ngay bằng ngôn ngữ **dự đoán**: ngôn ngữ nhận dạng
+   chắc chắn gần nhất trong `HAL_LANG_ID_STICKY_S` (120 s), nếu không thì ngôn ngữ
+   chính. Lượt cùng ngôn ngữ không thêm độ trễ.
+2. Nhận dạng (`hal/drivers/voice/lang_id/`) chạy ngoài mic thread trên audio của
+   lượt tại mỗi checkpoint: từ `HAL_LANG_ID_START_S` (1 s), mỗi
+   `HAL_LANG_ID_HOP_S` (1 s), tới `HAL_LANG_ID_MAX_S` (10 s). Checkpoint đi qua
+   khi đang bận nhận dạng hoặc đang đổi session thì bị bỏ qua.
+3. Khi kết quả khác ngôn ngữ của session với xác suất từ `HAL_LANG_ID_SWITCH_PROB`
+   (0.85) trở lên, một session bằng ngôn ngữ mới được kết nối ở background, toàn
+   bộ audio của lượt được phát lại vào đó, rồi thay session cũ. `_stream_session`
+   reset trạng thái transcript; transcript của session cũ bị bỏ. Kết nối thất bại
+   thì giữ session cũ.
+4. Lần kiểm tra ở 10 s là cuối cùng: kết quả cao nhất chỉ cần
+   `HAL_LANG_ID_FINAL_PROB` (0 = luôn tin), và dừng nhận dạng.
+5. Khi đóng, session chờ lần nhận dạng đang chạy (tối đa 1 s) và lần đổi session
+   (tối đa 5 s) để transcript cuối đến từ session đúng ngôn ngữ.
+
+Mỗi ngôn ngữ session chọn model riêng: English dùng `flux-general-en`, các ngôn
+ngữ khác dùng `nova-3-general` với mã ngôn ngữ đó. Với model, `zh-CN` và `zh-TW`
+là cùng một ngôn ngữ nói; dùng mã nào đứng trước trong `stt_languages`.
+
+**Giới hạn.** Câu nói dưới 1 s không được kiểm tra. Giọng nói ngoài tập ngôn ngữ
+bị ép vào tập (tiếng Hàn bị nhận là tiếng Nhật với ~0.99). Chỉ STT đi theo ngôn
+ngữ nhận dạng: giọng TTS, filler, câu i18n, khóa ngôn ngữ trong prompt realtime,
+foreign-script guard và ngôn ngữ trả lời của main agent vẫn theo `stt_language`.
+
 ### Block `realtime` trong `config.json`
 
 Model ở Go tại `system/server/config/realtime.go`; đọc ở HAL tại

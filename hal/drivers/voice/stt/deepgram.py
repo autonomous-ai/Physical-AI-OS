@@ -269,14 +269,18 @@ class DeepgramSTT(STTProvider):
         except ImportError as e:
             logger.error("deepgram-sdk not available — DeepgramSTT disabled (%s)", e)
 
-    def create_session(self) -> STTSession:
+    def create_session(self, language: Optional[str] = None) -> STTSession:
+        model = self._model
+        if language and language != self._language:
+            # Flux is English-only; another language needs Nova-3.
+            model = DEFAULT_MODEL if language == LANG_EN else "nova-3-general"
         return DeepgramSession(
             client=self._client,
             keywords=self._keywords,
             sample_rate=self._sample_rate,
             channels=self._channels,
-            language=self._language,
-            model=self._model,
+            language=language or self._language,
+            model=model,
         )
 
     @property

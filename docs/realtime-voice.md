@@ -3361,6 +3361,47 @@ doesn't double-restart. Hashing the whole file (rather than the HAL-read subset)
 keeps the signal self-maintaining as HAL's read set evolves; the only cost is one
 spurious HAL restart on the next boot after an os-server-only field changes.
 
+### Multi-language STT (spoken language identification)
+
+Off by default. It turns on when `config.json` lists two or more supported
+languages in `stt_languages` (for example `["en", "ja"]`) and the AmberNet ONNX
+model exists at `HAL_LANG_ID_MODEL_PATH` (default: the fp32 model
+`hal/drivers/voice/resources/ambernet.onnx`, labels
+`ambernet.labels.json` beside it, overridable with `HAL_LANG_ID_LABELS_PATH`). There
+is no web or API setting yet; edit `config.json` and restart HAL. `stt_language`
+stays the primary language. The Deepgram provider now also receives
+`stt_language` and its model (previously it always ran in English).
+
+`runtime.py` wraps the STT provider in `LanguageSwitchingSTT`
+(`hal/drivers/voice/stt/lang_switch.py`):
+
+1. Each turn's STT session opens at once in the **predicted** language: the last
+   confidently identified one for `HAL_LANG_ID_STICKY_S` (120 s), else the primary.
+   A same-language turn adds no latency.
+2. Identification (`hal/drivers/voice/lang_id/`) runs off the mic thread on the
+   turn's audio at every checkpoint: from `HAL_LANG_ID_START_S` (1 s) every
+   `HAL_LANG_ID_HOP_S` (1 s) up to `HAL_LANG_ID_MAX_S` (10 s). Checkpoints passed
+   while a check or switch is busy are skipped.
+3. When a guess differs from the session language with probability at least
+   `HAL_LANG_ID_SWITCH_PROB` (0.85), a session in the detected language connects
+   in the background, the whole turn's audio is replayed into it, and it replaces
+   the old one. `_stream_session` resets its transcript state; transcripts from
+   the old session are dropped. A failed connect keeps the old session.
+4. The 10 s check is final: its top guess needs only `HAL_LANG_ID_FINAL_PROB`
+   (0 = always trusted), and identification stops.
+5. On close the session waits for a pending check (up to 1 s) and switch (up to
+   5 s) so the final transcript comes from the right-language session.
+
+Each session language picks its own model: English uses `flux-general-en`, the
+others `nova-3-general` with that language code. `zh-CN` and `zh-TW` are one
+spoken language to the model; the first one listed in `stt_languages` is used.
+
+**Limits.** Utterances under 1 s are never checked. Speech in a language outside
+the set is forced into it (Korean is identified as Japanese with ~0.99). Only STT
+follows the detected language: TTS voice, fillers, i18n phrases, the realtime
+prompt language lock, the foreign-script guard and the main agent reply language
+still follow `stt_language`.
+
 ### `config.json` `realtime` block
 
 Modelled in Go at `system/server/config/realtime.go`; read in HAL at

@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlencode
 
 from hal.drivers.voice.stt.provider import STTProvider, STTSession
+from hal.presets import LANG_EN
 from hal.drivers.voice.tts.openai import _ensure_openai_v1
 
 logger = logging.getLogger("hal.voice.stt")
@@ -23,6 +24,13 @@ DEFAULT_INTERIM_RESULTS = "true"
 
 def _is_flux(model: str) -> bool:
     return model.startswith("flux")
+
+
+def model_for_language(language: Optional[str]) -> str:
+    """Mirror os-server sttModelForLanguage: Flux is English-only, others Nova-3."""
+    if not language or language == LANG_EN:
+        return DEFAULT_MODEL
+    return "nova-3-general"
 
 
 def _is_nova3(model: str) -> bool:
@@ -261,28 +269,43 @@ class AutonomousSTT(STTProvider):
         self._language = language or DEFAULT_LANGUAGE
         self._keywords = keywords or []
 
-        ws_base = _ensure_openai_v1(base_url).replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+        self._ws_base = _ensure_openai_v1(base_url).replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+        self._ws_url = self._build_ws_url(model, self._language)
+        # Per-language URLs for sessions opened by language identification.
+        self._ws_urls_by_language: Dict[str, str] = {}
+        logger.info("AutonomousSTT ready (url=%s, model=%s)", self._ws_url, model)
+
+    def _build_ws_url(self, model: str, language: Optional[str]) -> str:
         if _is_flux(model):
             params = _build_flux_query_params(
                 model=model,
-                sample_rate=sample_rate,
+                sample_rate=self._sample_rate,
                 encoding=DEFAULT_ENCODING,
                 keywords=self._keywords,
             )
         else:
             params = _build_nova_query_params(
                 model=model,
-                sample_rate=sample_rate,
-                channels=channels,
-                language=self._language,
+                sample_rate=self._sample_rate,
+                channels=self._channels,
+                language=language,
                 keywords=self._keywords,
             )
-        self._ws_url = _transcriptions_ws_url(ws_base, params)
-        logger.info("AutonomousSTT ready (url=%s, model=%s)", self._ws_url, model)
+        return _transcriptions_ws_url(self._ws_base, params)
 
-    def create_session(self) -> STTSession:
+    def _ws_url_for(self, language: Optional[str]) -> str:
+        """The configured URL, or one built with that language's model."""
+        if not language or language == self._language:
+            return self._ws_url
+        url = self._ws_urls_by_language.get(language)
+        if url is None:
+            url = self._build_ws_url(model_for_language(language), language)
+            self._ws_urls_by_language[language] = url
+        return url
+
+    def create_session(self, language: Optional[str] = None) -> STTSession:
         return AutonomousSTTSession(
-            ws_url=self._ws_url,
+            ws_url=self._ws_url_for(language),
             api_key=self._api_key,
             sample_rate=self._sample_rate,
         )

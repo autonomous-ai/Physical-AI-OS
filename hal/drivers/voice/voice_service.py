@@ -2487,6 +2487,24 @@ class VoiceService:
             final_ts[0] = time.time()
             stt_final_changed.set()
 
+        def on_language_switch(old: str, new: str) -> None:
+            # The replacement STT session re-transcribes the whole turn; drop
+            # what the wrong-language session produced so far.
+            logger.info("STT language switched %s -> %s; transcript state reset", old, new)
+            last_partial[0] = ""
+            final_segments.clear()
+            final_sent[0] = False
+            final_ts[0] = 0.0
+            wake_partial_hypothesis[0] = ""
+            wake_final_hypothesis[0] = ""
+
+        def bind_language_switch(session) -> None:
+            set_listener = getattr(session, "set_switch_listener", None)
+            if set_listener is not None:
+                set_listener(on_language_switch)
+
+        bind_language_switch(stt_session)
+
         rt_audio_buffer: list = []
         realtime_deferred = False
         realtime_turn_started = False
@@ -2701,6 +2719,7 @@ class VoiceService:
                     except Exception:
                         pass
                     stt_session = self._stt.create_session()
+                    bind_language_switch(stt_session)
                     if not stt_session.start(on_transcript):
                         raise RuntimeError("fresh STT session failed to connect") from e
                     _send_pre_roll()

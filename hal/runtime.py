@@ -549,11 +549,16 @@ async def lifespan(app: FastAPI):
             logger.info("STT selection: deepgram_key=%s, DeepgramSTT=%s, AutonomousSTT=%s, agent=%s",
                         bool(dgk), DeepgramSTT is not None, AutonomousSTT is not None, agent_name)
             stt_keywords = state._stt_boost_terms()
+            stt_model = (os_cfg.get("stt_model") or "").strip() or None
+            stt_language = normalize_language(os_cfg.get("stt_language")) or None
             if dgk and DeepgramSTT:
-                stt_provider = DeepgramSTT(api_key=dgk, keywords=stt_keywords)
+                from hal.drivers.voice.stt.autonomous import model_for_language
+
+                stt_provider = DeepgramSTT(
+                    api_key=dgk, keywords=stt_keywords, language=stt_language,
+                    model=stt_model or model_for_language(stt_language),
+                )
             elif stt_key and stt_url and AutonomousSTT:
-                stt_model = (os_cfg.get("stt_model") or "").strip() or None
-                stt_language = normalize_language(os_cfg.get("stt_language")) or None
                 stt_kwargs = {}
                 if stt_model:
                     stt_kwargs["model"] = stt_model
@@ -564,6 +569,11 @@ async def lifespan(app: FastAPI):
                     keywords=stt_keywords, **stt_kwargs
                 )
             if stt_provider:
+                from hal.drivers.voice.stt.lang_switch import wrap_with_language_id
+
+                stt_provider = wrap_with_language_id(
+                    stt_provider, os_cfg.get("stt_languages"), stt_language,
+                )
                 state.voice_service = VoiceService(
                     stt_provider=stt_provider,
                     input_device=state.audio_input_device,
