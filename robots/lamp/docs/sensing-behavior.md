@@ -74,12 +74,12 @@ For standalone sound events outside guard mode, `skills/sensing/SKILL.md` specif
 | Occurrence 1 | `... — occurrence 1` | `/emotion curious` (0.6), NO_REPLY |
 | Occurrence 2 | **nothing** — counted tracker-side, not forwarded | no agent turn |
 | Occurrence 3+ | `... — persistent (occurrence 3)` | `/emotion shock` (0.9), speaks once |
-| After speaking | dropped by Python (suppressed 3 min) | nothing reaches agent |
-| 2 min silence | window resets | back to occurrence 1 |
+| After speaking | dropped by Python (habituated) | nothing reaches agent while the noise goes on |
+| 2 min silence | habituation and window reset | back to occurrence 1 |
 
 Middle occurrences (2 .. persistent−1) advance the counter but are not forwarded: each forward is a full LLM turn, and "still noisy" between the transition (occurrence 1) and the escalation (persistent) gives the agent nothing to act on — in sustained noise this cuts 3 turns per cycle to 2.
 
-The analogy: a dog hears a noise — it looks up (occurrence 1), keeps watching quietly (occurrence 2, no report), then barks once if the noise persists (occurrence 3+). After barking it doesn't keep barking.
+The analogy: a dog hears a noise — it looks up (occurrence 1), keeps watching quietly (occurrence 2, no report), then barks once if the noise persists (occurrence 3+). After barking it doesn't keep barking: it gets used to the noise. Habituation (`_habituated` in `sound.py`) keeps every later sample of the same noise dropped until there has been `_WINDOW_DURATION_S` of quiet, so a vacuum running for 30 minutes startles the lamp once, not every ~3.5 minutes as when only the 3-minute suppress applied.
 
 ### Constants (`sound.py`)
 
@@ -87,7 +87,7 @@ The analogy: a dog hears a noise — it looks up (occurrence 1), keeps watching 
 _DEDUPE_INTERVAL_S    = 15.0   # max 1 event forwarded per 15s
 _WINDOW_DURATION_S    = 120.0  # silence this long resets the counter
 _PERSISTENT_AFTER     = 3      # speak after this many occurrences
-_SUPPRESS_DURATION_S  = 180.0  # suppress after speaking (3 min)
+_SUPPRESS_DURATION_S  = 180.0  # suppress after speaking (3 min); habituation extends it while the noise goes on
 ```
 
 ### Tuning
