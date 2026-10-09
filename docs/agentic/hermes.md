@@ -1168,6 +1168,25 @@ its late result cannot inject skill content. HTTP 429 follows the same fallback
 and 30-second cooldown; no provider error body or `Retry-After` diagnostics are
 added by preloading.
 
+Machine event turns reuse the decision for their kind. When the message starts
+with a lowercase header such as `[sensing:sound]` or `[environment:update]`
+(anything except `[user]`), the first valid decision (preload or abstention) is
+memoized under that header plus the current eligible skill set; later turns of
+that kind skip the proxy request, still recheck and natively load the skill,
+and log `cached=1` without `request_ms`. A catalog change or a plugin restart
+clears the reuse; errors and timeouts are never memoized; the memo holds at most
+64 entries and is cleared when full. Typed user text always asks the proxy. Rationale: on lamp-52e6 (2026-10-06..09)
+every valid decision per event kind was identical (`sensing:sound`, `environment:update`
+and `activity` always preloaded the same skill; `sensing:presence.*` enter/away always
+abstained) while each request blocked the turn for ~1.5 s.
+
+Voice turns (`[via:voice]` anywhere in the message) skip the decision and log
+`outcome=skipped reason=voice_turn`. On lamp-52e6 the plugin blocked every voice
+turn for a median 1.47 s (n=300) while a preload happened on only ~11% of them and
+spared at most one `skill_view` round (~2.5 s). A same-binary A/B (11 injected voice
+turns each) cut no-tool replies from 3.4-7.0 s to 2.2-2.6 s and added no
+`skill_view` rounds.
+
 Structured logs distinguish accepted selections from valid abstentions and
 failures instead of grouping them as `deferred`:
 
