@@ -65,6 +65,7 @@ cargo fmt --all -- --check
 | `lamp-gemini` | Bounded Gemini Live WebSocket transport, explicit activity, immutable response ownership and cancellation barriers. |
 | `lamp-live` | Finite directed qualification with separate capture, speaker, physical privacy and provider processes; optional supervised ring cues share conversation ownership. |
 | `lamp-observer` | Mac room recording and native microphone permission preflight; explicit cached iMac-speaker playback with delivery/failure evidence. |
+| `lamp-voice-eval` | Event-triggered conversation acceptance runner and evaluator: pre-registered scenarios, append-only attempt ledger, fake runtime, trace import and a prepared physical runner. See [voice evaluation](docs/voice-eval.md). |
 
 See the [directed runtime](docs/live-runtime.md),
 [conversation/ring ownership](docs/ring-choreography.md),
@@ -83,11 +84,13 @@ cargo run -p lamp-acoustic -- render .cache/acoustic .cache/render-first.json
 cargo run -p lamp-acoustic -- verify .cache/acoustic
 cargo run --release -p lamp-ipc --bin lamp-ipc-probe -- --samples 1000
 cargo run --release -p lamp-audio -- bench-aec 6000
+cargo run -p lamp-voice-eval -- fake-run --out NEW_RUN_DIRECTORY
 ```
 
 Keep `.cache/acoustic/` when cleaning build output. Rendering uses installed Mac
 voices and reuses verified audio; it does not require cloud TTS or an LLM.
 Use a new report path for every render. The IPC probe measures control roundtrip
 between processes with a separate saturated bulk queue. The audio benchmark
-measures synthetic DSP processing and signal integrity. Neither is an acoustic
-speech-to-answer measurement or a completed live Lamp test.
+measures synthetic DSP processing and signal integrity. The voice-eval fake run
+simulates the directed turn policy against declared stimuli. None of these is an
+acoustic speech-to-answer measurement or a completed live Lamp test.
