@@ -4,7 +4,7 @@
 //! with fixed diagnostic categories and no retained raw payload.
 use crate::{
     Error, MAX_INPUT_SAMPLES, MAX_OUTPUT_SAMPLES, MAX_TEXT_BYTES, MAX_WIRE_BYTES, Result,
-    SessionConfig, VoiceActivity,
+    Resumption, ResumptionHandle, SessionConfig, VoiceActivity,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{
@@ -35,17 +35,31 @@ pub struct ServerContent {
     pub turn_complete: bool,
     pub idle: bool,
 }
+/// Advance notice of a server-side close. `time_left` is absent when the
+/// service omits it or sends a form this codec does not read.
+#[derive(Debug)]
+pub struct GoAway {
+    pub time_left: Option<Duration>,
+}
+/// Only produced by [`decode_server_retaining`]. `handle` is absent when the
+/// service reports a point that cannot be resumed.
+#[derive(Debug)]
+pub struct ResumptionUpdate {
+    pub handle: Option<ResumptionHandle>,
+    pub resumable: bool,
+}
 #[derive(Debug)]
 pub struct ServerFrame {
     pub setup_complete: bool,
     pub content: Option<ServerContent>,
     pub voice_activity: Option<Activity>,
-    pub go_away: bool,
+    pub go_away: Option<GoAway>,
+    pub resumption: Option<ResumptionUpdate>,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Envelope {
+#[serde(rename_all = "camelCase", bound(deserialize = "R: Deserialize<'de>"))]
+struct Envelope<R> {
     setup_complete: Option<serde_json::Value>,
     server_content: Option<RawContent>,
     voice_activity: Option<RawActivity>,
@@ -53,55 +67,91 @@ struct Envelope {
     usage_metadata: Option<IgnoredAny>,
     tool_call: Option<IgnoredAny>,
     tool_call_cancellation: Option<IgnoredAny>,
-    session_resumption_update: Option<IgnoredResumptionUpdate>,
-    error: Option<IgnoredAny>,
+    session_resumption_update: Option<R>,
+    error: Option<serde_json::Value>,
 }
-/// Optional server metadata is not a request to resume. Validate the documented
-/// object fields and discard the handle during parsing: no token reaches a
-/// ServerFrame, actor event, session config, diagnostic, or persisted state.
+/// Validates the documented object fields either way. The discarding form
+/// never materializes the handle; the retaining form keeps it only inside an
+/// opaque in-memory [`ResumptionHandle`].
+trait ResumptionMetadata: Sized {
+    type Handle: for<'de> Deserialize<'de>;
+    fn build(handle: Option<Self::Handle>, resumable: bool) -> Self;
+    fn update(self) -> Option<ResumptionUpdate>;
+}
 struct IgnoredResumptionUpdate;
-impl<'de> Deserialize<'de> for IgnoredResumptionUpdate {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        struct MetadataVisitor;
-        impl<'de> Visitor<'de> for MetadataVisitor {
-            type Value = IgnoredResumptionUpdate;
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a session resumption metadata object")
-            }
-            fn visit_map<A: MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> std::result::Result<Self::Value, A::Error> {
-                let mut handle_seen = false;
-                let mut resumable_seen = false;
-                while let Some(field) = map.next_key::<ResumptionField>()? {
-                    match field {
-                        ResumptionField::NewHandle => {
-                            if handle_seen {
-                                return Err(de::Error::duplicate_field("newHandle"));
-                            }
-                            handle_seen = true;
-                            let _ = map.next_value::<DiscardedString>()?;
-                        }
-                        ResumptionField::Resumable => {
-                            if resumable_seen {
-                                return Err(de::Error::duplicate_field("resumable"));
-                            }
-                            resumable_seen = true;
-                            let _ = map.next_value::<bool>()?;
-                        }
-                        ResumptionField::Other => {
-                            let _ = map.next_value::<IgnoredAny>()?;
-                        }
-                    }
-                }
-                Ok(IgnoredResumptionUpdate)
-            }
-        }
-        // deserialize_map rejects array/scalar substitutes for the object.
-        deserializer.deserialize_map(MetadataVisitor)
+impl ResumptionMetadata for IgnoredResumptionUpdate {
+    type Handle = DiscardedString;
+    fn build(_: Option<DiscardedString>, _: bool) -> Self {
+        Self
+    }
+    fn update(self) -> Option<ResumptionUpdate> {
+        None
     }
 }
+struct RetainedResumptionUpdate(ResumptionUpdate);
+impl ResumptionMetadata for RetainedResumptionUpdate {
+    type Handle = String;
+    fn build(handle: Option<String>, resumable: bool) -> Self {
+        // A handle reported as not resumable, empty or oversized is not kept.
+        Self(ResumptionUpdate {
+            handle: handle
+                .filter(|_| resumable)
+                .as_deref()
+                .and_then(ResumptionHandle::new),
+            resumable,
+        })
+    }
+    fn update(self) -> Option<ResumptionUpdate> {
+        Some(self.0)
+    }
+}
+struct MetadataVisitor<R>(std::marker::PhantomData<R>);
+impl<'de, R: ResumptionMetadata> Visitor<'de> for MetadataVisitor<R> {
+    type Value = R;
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a session resumption metadata object")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> std::result::Result<R, A::Error> {
+        let mut handle = None;
+        let mut handle_seen = false;
+        let mut resumable = None;
+        while let Some(field) = map.next_key::<ResumptionField>()? {
+            match field {
+                ResumptionField::NewHandle => {
+                    if handle_seen {
+                        return Err(de::Error::duplicate_field("newHandle"));
+                    }
+                    handle_seen = true;
+                    handle = Some(map.next_value::<R::Handle>()?);
+                }
+                ResumptionField::Resumable => {
+                    if resumable.is_some() {
+                        return Err(de::Error::duplicate_field("resumable"));
+                    }
+                    resumable = Some(map.next_value::<bool>()?);
+                }
+                ResumptionField::Other => {
+                    let _ = map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        Ok(R::build(handle, resumable.unwrap_or(false)))
+    }
+}
+macro_rules! resumption_metadata {
+    ($name:ty) => {
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(
+                deserializer: D,
+            ) -> std::result::Result<Self, D::Error> {
+                // deserialize_map rejects array/scalar substitutes for the object.
+                deserializer.deserialize_map(MetadataVisitor::<$name>(std::marker::PhantomData))
+            }
+        }
+    };
+}
+resumption_metadata!(IgnoredResumptionUpdate);
+resumption_metadata!(RetainedResumptionUpdate);
 
 #[derive(Deserialize)]
 #[serde(field_identifier)]
@@ -178,13 +228,38 @@ struct RawActivity {
     audio_offset: Option<String>,
 }
 
+/// Decode one server message, discarding any session resumption handle while
+/// parsing. No handle reaches the returned frame.
 pub fn decode_server(bytes: &[u8]) -> Result<ServerFrame> {
+    decode::<IgnoredResumptionUpdate>(bytes)
+}
+
+/// Decode one server message and keep a resumable handle in memory. Used only
+/// by a session whose configuration enables [`Resumption`].
+pub fn decode_server_retaining(bytes: &[u8]) -> Result<ServerFrame> {
+    decode::<RetainedResumptionUpdate>(bytes)
+}
+
+/// Fixed category for a server `error` object. The code and status select the
+/// category; neither they nor the message text are retained.
+fn rejection(error: &serde_json::Value) -> Error {
+    let code = error.get("code").and_then(serde_json::Value::as_i64);
+    let status = error.get("status").and_then(serde_json::Value::as_str);
+    match (code, status) {
+        (Some(429), _) | (_, Some("RESOURCE_EXHAUSTED")) => Error::QuotaExceeded,
+        (Some(500..=599), _) | (_, Some("UNAVAILABLE" | "INTERNAL")) => Error::ServerUnavailable,
+        _ => Error::ServerRejected,
+    }
+}
+
+fn decode<R: ResumptionMetadata + for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<ServerFrame> {
     if bytes.len() > MAX_WIRE_BYTES {
         return Err(Error::MessageTooLarge);
     }
-    let envelope: Envelope = serde_json::from_slice(bytes).map_err(|_| Error::MalformedMessage)?;
-    if envelope.error.is_some() {
-        return Err(Error::ServerRejected);
+    let envelope: Envelope<R> =
+        serde_json::from_slice(bytes).map_err(|_| Error::MalformedMessage)?;
+    if let Some(error) = &envelope.error {
+        return Err(rejection(error));
     }
     if envelope.tool_call.is_some() || envelope.tool_call_cancellation.is_some() {
         return Err(Error::UnsupportedMessage);
@@ -242,7 +317,17 @@ pub fn decode_server(bytes: &[u8]) -> Result<ServerFrame> {
         setup_complete: envelope.setup_complete.is_some(),
         content,
         voice_activity,
-        go_away: envelope.go_away.is_some(),
+        // The notice matters more than its optional duration: an unreadable
+        // timeLeft is reported as absent, not as a malformed message.
+        go_away: envelope.go_away.map(|raw| GoAway {
+            time_left: raw
+                .get("timeLeft")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| parse_duration(value).ok()),
+        }),
+        resumption: envelope
+            .session_resumption_update
+            .and_then(ResumptionMetadata::update),
     })
 }
 
@@ -364,7 +449,8 @@ fn parse_duration(raw: &str) -> Result<Duration> {
 }
 
 pub fn encode_setup(config: &SessionConfig) -> Result<String> {
-    // No tools, search, session resumption or provider-side admission policy.
+    // No tools, search or provider-side admission policy. Session resumption
+    // appears only when explicitly requested or when presenting a handle.
     let mut setup = json!({"setup": {
         "model": format!("models/{}", config.model),
         "generationConfig": {
@@ -387,6 +473,11 @@ pub fn encode_setup(config: &SessionConfig) -> Result<String> {
     }
     if let Some(language) = &config.language_code {
         setup["setup"]["generationConfig"]["speechConfig"]["languageCode"] = json!(language);
+    }
+    if let Some(handle) = &config.resume {
+        setup["setup"]["sessionResumption"] = json!({"handle": handle.expose()});
+    } else if config.resumption == Resumption::Request {
+        setup["setup"]["sessionResumption"] = json!({});
     }
     serde_json::to_string(&setup).map_err(|_| Error::InvalidConfiguration)
 }
