@@ -712,3 +712,109 @@ fn voice_and_ring_state_stay_consistent_through_cancellation_and_breaks_are_dete
         assert_eq!(score.outcome, Outcome::Failed);
     }
 }
+
+#[test]
+fn repeated_interruptions_each_yield_on_their_own_trigger() {
+    let s = setup();
+    let records = run(&s, "v2-directed-current", &["repeated-interruptions"], None);
+    let score = score(&s, &records[0]);
+    assert_eq!(score.outcome, Outcome::Passed, "{:?}", score.findings);
+    let yields: Vec<_> = score.steps.iter().map(|st| st.interruption).collect();
+    assert_eq!(yields, vec![None, Some(true), Some(true), Some(true)]);
+    // Each interruption is bound to the reply of the step before it.
+    let bound: Vec<_> = records[0].steps.iter().map(|st| st.bound_turn).collect();
+    assert_eq!(bound, vec![None, Some(1), Some(2), Some(3)]);
+    assert_eq!(score.steps[3].answer, Some(AnswerOutcome::Complete));
+}
+
+#[test]
+fn an_unfinished_question_with_a_long_pause_splits_and_its_resumption_yields() {
+    let s = setup();
+    let pause = score(
+        &s,
+        &run(
+            &s,
+            "v2-directed-current",
+            &["unfinished-question-pause"],
+            None,
+        )[0],
+    );
+    assert!(kinds(&pause).contains(&FindingKind::TurnSplit));
+    let resume = score(
+        &s,
+        &run(
+            &s,
+            "v2-directed-current",
+            &["unfinished-question-resume"],
+            None,
+        )[0],
+    );
+    assert!(
+        matches!(&resume.steps[0].status, CheckStatus::Unscored { .. }),
+        "fragments are judged by their continuation"
+    );
+    assert_eq!(resume.steps[1].interruption, Some(true));
+    assert_eq!(resume.steps[1].answer, Some(AnswerOutcome::Complete));
+}
+
+#[test]
+fn background_talk_that_revokes_the_request_is_a_false_interruption_not_a_split() {
+    let s = setup();
+    let score = score(
+        &s,
+        &run(
+            &s,
+            "v2-directed-current",
+            &["background-conversation-question"],
+            None,
+        )[0],
+    );
+    assert!(
+        !kinds(&score).contains(&FindingKind::TurnSplit),
+        "{:?}",
+        score.findings
+    );
+    let interruption = score
+        .findings
+        .iter()
+        .find(|f| f.kind == FindingKind::FalseInterruption)
+        .expect("background revoked the request");
+    assert!(
+        interruption.detail.contains("background speech"),
+        "{}",
+        interruption.detail
+    );
+    assert!(matches!(
+        score.steps[0].answer,
+        Some(AnswerOutcome::Missing { .. })
+    ));
+}
+
+#[test]
+fn a_session_that_ends_after_a_disconnect_is_scored_as_no_recovery() {
+    let s = setup();
+    for scenario in ["disconnect-between-turns", "disconnect-mid-reply-recovery"] {
+        let records = run(&s, "v2-directed-current", &[scenario], None);
+        let score = score(&s, &records[0]);
+        assert!(
+            kinds(&score).contains(&FindingKind::NoRecovery),
+            "{scenario}: {:?}",
+            score.findings
+        );
+        assert!(
+            !kinds(&score).contains(&FindingKind::RuntimeFailure),
+            "the injected failure is not double counted"
+        );
+        assert_eq!(score.outcome, Outcome::Failed);
+    }
+    let slow = score(
+        &s,
+        &run(
+            &s,
+            "v2-directed-current",
+            &["slow-response-then-follow-up"],
+            None,
+        )[0],
+    );
+    assert_eq!(slow.outcome, Outcome::Passed, "{:?}", slow.findings);
+}

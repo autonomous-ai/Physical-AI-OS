@@ -353,7 +353,7 @@ mod tests {
         assert!(catalog.scene("quiet-question").is_ok());
         assert!(catalog.extension_scenes.contains("ack-yeah"));
         assert!(!catalog.extension_utterances.contains("math"));
-        assert_eq!(catalog.extension_utterances.len(), 6);
+        assert_eq!(catalog.extension_utterances.len(), 8);
     }
 
     #[test]

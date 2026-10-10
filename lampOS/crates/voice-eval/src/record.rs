@@ -95,6 +95,9 @@ pub struct StepRecord {
     pub receipt: Value,
     #[serde(default)]
     pub detail: Option<String>,
+    /// Utterances addressed to Lamp in a multi-talker scene.
+    #[serde(default)]
+    pub addressed: Vec<String>,
 }
 impl StepRecord {
     pub fn planned(step: &crate::plan::Step, status: StepStatus) -> Self {
@@ -110,6 +113,7 @@ impl StepRecord {
             timing: None,
             receipt: Value::Null,
             detail: None,
+            addressed: step.addressed.clone(),
         }
     }
 }

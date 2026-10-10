@@ -137,6 +137,7 @@ impl LiveView {
                             TriggerEvent::SpeakerFirstWrite
                         )
                         | (EventKind::SpeechRetired, TriggerEvent::SpeechRetired)
+                        | (EventKind::TurnCancelled { .. }, TriggerEvent::TurnCancelled)
                 );
                 kind && (after == TriggerEvent::ListeningReady
                     || event.turn.is_none_or(|turn| turn > known_turn))

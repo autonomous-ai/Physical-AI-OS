@@ -64,6 +64,7 @@ pub struct StratumSummary {
     pub late_answers: usize,
     pub runtime_failures: usize,
     pub unannounced_failures: usize,
+    pub no_recovery: usize,
     /// Stale output/cue, overlapping replies, unterminated turns, ring mismatch.
     pub state_inconsistencies: usize,
     pub withheld_steps: usize,
@@ -169,6 +170,7 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
                     Expectation::Answer
                         | Expectation::InterruptAndAnswer
                         | Expectation::HonestFailure
+                        | Expectation::RecoverAndAnswer
                 )
             {
                 match step.lost_opening_ms {
@@ -195,6 +197,7 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
                 FindingKind::LateAnswer => s.late_answers += 1,
                 FindingKind::RuntimeFailure => s.runtime_failures += 1,
                 FindingKind::UnannouncedFailure => s.unannounced_failures += 1,
+                FindingKind::NoRecovery => s.no_recovery += 1,
                 FindingKind::StaleOutput
                 | FindingKind::OverlappingOutput
                 | FindingKind::UnterminatedTurn
@@ -411,6 +414,10 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
                     s.ring_checked,
                     s.attempts - s.invalid_excluded
                 ),
+            ),
+            (
+                "Sessions that did not recover after a provider failure",
+                s.no_recovery.to_string(),
             ),
             (
                 "Failures without a spoken notice",
