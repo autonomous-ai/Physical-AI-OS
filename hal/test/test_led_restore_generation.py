@@ -93,3 +93,20 @@ def test_replacement_waits_for_already_rendering_restore(lifecycle):
             other.join(2)
     assert not worker.is_alive() and not other.is_alive()
     assert order == ['old_finished', 'new_owner']
+
+
+def test_transient_solid_invalidates_before_paint(lifecycle, monkeypatch):
+    from hal.routes.led import _set_led_solid
+    from hal.models import LEDSolidRequest
+
+    timers, display = lifecycle
+    monkeypatch.setattr(state, '_sleeping', False)
+    monkeypatch.setattr(state, '_stop_current_effect', mock.Mock())
+    rgb = mock.Mock()
+    monkeypatch.setattr(state, 'rgb_service', rgb)
+    state._schedule_led_restore(1)
+    # Force the old callback to arrive at the first new hardware write.
+    rgb.dispatch.side_effect = lambda *args: timers[0].fire()
+    _set_led_solid(LEDSolidRequest(color=[1, 2, 3], transient=True))
+    display.assert_not_called()
+    rgb.dispatch.assert_called_once()

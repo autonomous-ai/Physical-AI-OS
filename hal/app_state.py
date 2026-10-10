@@ -1312,6 +1312,7 @@ def _apply_emotion_led_display(
                 logger.warning("Emotion display failed: %s", e)
         return None
     if rgb_service and preset.get("color"):
+        _cancel_pending_restore()
         scaled = [int(c * intensity) for c in preset["color"]]
         try:
             if preset.get("effect"):
