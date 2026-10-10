@@ -1,0 +1,567 @@
+{
+  "version": 1,
+  "utterances": {
+    "hello": {
+      "text": "Lamp, how are you doing today?",
+      "voice": "Daniel",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "math": {
+      "text": "Lamp, what's twelve divided by three?",
+      "voice": "Daniel",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "mid-name": {
+      "text": "By the way, Lamp, why does the sky look blue?",
+      "voice": "Samantha",
+      "wpm": 205,
+      "voice_revision": "builtin-en-v1"
+    },
+    "meeting": {
+      "text": "Samantha, are you ready for our meeting?",
+      "voice": "Daniel",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "email": {
+      "text": "Yes, let me finish this email first.",
+      "voice": "Samantha",
+      "wpm": 195,
+      "voice_revision": "builtin-en-v1"
+    },
+    "lamp-mention": {
+      "text": "The lamp is next to my monitor. Could you move the notebook?",
+      "voice": "Daniel",
+      "wpm": 195,
+      "voice_revision": "builtin-en-v1"
+    },
+    "colleague-reply": {
+      "text": "Sure. Then let's review the slides together.",
+      "voice": "Samantha",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "siri": {
+      "text": "Hey Siri, set a timer for five minutes.",
+      "voice": "Daniel",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "siri-reply": {
+      "text": "Your timer is running.",
+      "voice": "Samantha",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "call": {
+      "text": "Can you hear me now? Sorry, my microphone was muted.",
+      "voice": "Daniel",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "call-reply": {
+      "text": "I can hear you. Let's start with the first slide.",
+      "voice": "Samantha",
+      "wpm": 200,
+      "voice_revision": "builtin-en-v1"
+    },
+    "media": {
+      "text": "Today we're discussing how people make their desks more comfortable. A good lamp is one part of the setup.",
+      "voice": "Samantha",
+      "wpm": 200,
+      "voice_revision": "builtin-en-v1"
+    },
+    "correction": {
+      "text": "Actually, Lamp, let's talk about coffee instead. Why does it smell so good?",
+      "voice": "Daniel",
+      "wpm": 210,
+      "voice_revision": "builtin-en-v1"
+    },
+    "acknowledgment": {
+      "text": "Mm-hmm.",
+      "voice": "Samantha",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "hesitation-a": {
+      "text": "Lamp, I've had a difficult morning, and I think the part that bothered me was",
+      "voice": "Daniel",
+      "wpm": 185,
+      "voice_revision": "builtin-en-v1"
+    },
+    "hesitation-b": {
+      "text": "that nobody listened. I just want to talk about it for a minute.",
+      "voice": "Daniel",
+      "wpm": 185,
+      "voice_revision": "builtin-en-v1"
+    },
+    "yes": {
+      "text": "Yes.",
+      "voice": "Samantha",
+      "wpm": 205,
+      "voice_revision": "builtin-en-v1"
+    },
+    "no": {
+      "text": "No, let's talk about something else.",
+      "voice": "Samantha",
+      "wpm": 205,
+      "voice_revision": "builtin-en-v1"
+    },
+    "camera": {
+      "text": "Lamp, what do you see in front of you?",
+      "voice": "Daniel",
+      "wpm": 195,
+      "voice_revision": "builtin-en-v1"
+    },
+    "owner-noisy": {
+      "text": "Lamp, tell me one interesting fact about the ocean.",
+      "voice": "Daniel",
+      "wpm": 200,
+      "voice_revision": "builtin-en-v1"
+    },
+    "colleague-overlap": {
+      "text": "I'll take the meeting in the other room. See you in a minute.",
+      "voice": "Samantha",
+      "wpm": 195,
+      "voice_revision": "builtin-en-v1"
+    },
+    "ambiguous": {
+      "text": "Do you want some coffee?",
+      "voice": "Daniel",
+      "wpm": 190,
+      "voice_revision": "builtin-en-v1"
+    },
+    "fast-followup": {
+      "text": "And why does that happen?",
+      "voice": "Samantha",
+      "wpm": 220,
+      "voice_revision": "builtin-en-v1"
+    },
+    "pause-speech": {
+      "text": "Lamp, can you tell me a short story about a friendly robot?",
+      "voice": "Daniel",
+      "wpm": 195,
+      "voice_revision": "builtin-en-v1"
+    }
+  },
+  "scenes": [
+    {
+      "id": "quick-chat",
+      "description": "Direct greeting",
+      "expectation": "One natural, relevant reply.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "hello",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "quick-fact",
+      "description": "Simple known answer",
+      "expectation": "Answer four; no task delegation.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "math",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "mid-sentence-address",
+      "description": "Name in the middle of a request",
+      "expectation": "Accept the addressed question and answer.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "mid-name",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "two-colleagues",
+      "description": "Two people speak to each other",
+      "expectation": "Remain silent without social acknowledgment gestures.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 24000,
+      "clips": [
+        {
+          "utterance": "meeting",
+          "at_ms": 1000,
+          "gain_db": -6
+        },
+        {
+          "utterance": "email",
+          "at_ms": 4500,
+          "gain_db": -6
+        },
+        {
+          "utterance": "lamp-mention",
+          "at_ms": 8500,
+          "gain_db": -6
+        },
+        {
+          "utterance": "colleague-reply",
+          "at_ms": 13500,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "other-device",
+      "description": "Speaker talks to a different device",
+      "expectation": "Remain silent; do not set a timer or claim an action.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "siri",
+          "at_ms": 1000,
+          "gain_db": -6
+        },
+        {
+          "utterance": "siri-reply",
+          "at_ms": 5500,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "computer-call",
+      "description": "A simulated call at the desk",
+      "expectation": "Remain silent without social acknowledgment gestures.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "call",
+          "at_ms": 1000,
+          "gain_db": -6
+        },
+        {
+          "utterance": "call-reply",
+          "at_ms": 6000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "background-media",
+      "description": "Synthetic media mentions a lamp",
+      "expectation": "Remain silent.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "media",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "ambiguous-not-invited",
+      "description": "Unaddressed question after two colleagues talk",
+      "expectation": "Remain silent without asking whether it was addressed to Lamp.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "meeting",
+          "at_ms": 1000,
+          "gain_db": -6
+        },
+        {
+          "utterance": "email",
+          "at_ms": 4500,
+          "gain_db": -6
+        },
+        {
+          "utterance": "ambiguous",
+          "at_ms": 9500,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "topic-change",
+      "description": "Natural topic change while Lamp speaks",
+      "expectation": "Yield promptly, preserve the new request and answer the coffee question.",
+      "precondition": "Start Lamp answering the cached story request; confirm actual audible Lamp speech.",
+      "trigger": {
+        "event": "lamp_speech_started",
+        "delay_ms": 1200
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "correction",
+          "at_ms": 0,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "listener-acknowledgment",
+      "description": "A brief listener acknowledgment",
+      "expectation": "Do not treat this acknowledgment as an unrelated new question.",
+      "precondition": "Lamp is audibly telling the requested story.",
+      "trigger": {
+        "event": "lamp_speech_started",
+        "delay_ms": 1500
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "acknowledgment",
+          "at_ms": 0,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "hesitant-sharing",
+      "description": "Long thought with an internal pause",
+      "expectation": "Let the thought finish, then respond to its meaning without reflexively giving advice.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 24000,
+      "clips": [
+        {
+          "utterance": "hesitation-a",
+          "at_ms": 1000,
+          "gain_db": -6
+        },
+        {
+          "utterance": "hesitation-b",
+          "at_ms": 7000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "short-yes",
+      "description": "Short answer to Lamp's question",
+      "expectation": "Accept yes in the context of the pending question.",
+      "precondition": "Lamp has asked a yes/no question; retain that pending question.",
+      "trigger": {
+        "event": "lamp_speech_ended",
+        "delay_ms": 800
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "yes",
+          "at_ms": 0,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "short-no",
+      "description": "Short refusal and topic change",
+      "expectation": "Accept the refusal and topic change.",
+      "precondition": "Lamp has asked a yes/no question; retain that pending question.",
+      "trigger": {
+        "event": "lamp_speech_ended",
+        "delay_ms": 700
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "no",
+          "at_ms": 0,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "fast-followup",
+      "description": "Fast context-dependent follow-up",
+      "expectation": "Keep context and answer without requiring the name again.",
+      "precondition": "Lamp has just explained why the sky is blue.",
+      "trigger": {
+        "event": "lamp_speech_ended",
+        "delay_ms": 500
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "fast-followup",
+          "at_ms": 0,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "visual-chat",
+      "description": "Question about the current view",
+      "expectation": "Use fresh camera evidence; acknowledge unavailable or uncertain vision honestly.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "camera",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "noisy-question",
+      "description": "Addressed question with synthetic ventilation",
+      "expectation": "Answer the addressed question without responding to noise alone.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "owner-noisy",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": {
+        "kind": "ventilation",
+        "seed": 401,
+        "rms_dbfs": -28
+      }
+    },
+    {
+      "id": "typing-question",
+      "description": "Addressed question with synthetic keyboard clicks",
+      "expectation": "Accept the addressed request; do not treat clicks as speech.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "math",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": {
+        "kind": "keyboard",
+        "seed": 402,
+        "rms_dbfs": -30
+      }
+    },
+    {
+      "id": "overlapping-speakers",
+      "description": "An addressed question overlaps a colleague",
+      "expectation": "Follow the clear request when intelligible; ask a relevant clarification otherwise.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "owner-noisy",
+          "at_ms": 1000,
+          "gain_db": -6
+        },
+        {
+          "utterance": "colleague-overlap",
+          "at_ms": 1900,
+          "gain_db": -15
+        }
+      ],
+      "noise": null
+    },
+    {
+      "id": "noise-only",
+      "description": "Synthetic room noise with no speech",
+      "expectation": "Remain silent.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [],
+      "noise": {
+        "kind": "ventilation",
+        "seed": 403,
+        "rms_dbfs": -24
+      }
+    },
+    {
+      "id": "story-primer",
+      "description": "Request that establishes speaking for interruption tests",
+      "expectation": "Tell a short story; prepare a separate event-triggered interruption case.",
+      "precondition": "Lamp awake and input verified; no active conversation unless specified.",
+      "trigger": {
+        "event": "scene_start"
+      },
+      "duration_ms": 20000,
+      "clips": [
+        {
+          "utterance": "pause-speech",
+          "at_ms": 1000,
+          "gain_db": -6
+        }
+      ],
+      "noise": null
+    }
+  ]
+}

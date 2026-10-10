@@ -1,0 +1,21 @@
+[package]
+name = "lamp-gemini"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+base64 = "=0.22.1"
+# Tungstenite traces raw serialized authentication headers. Compile those
+# dependency debug/trace sites out even when the application enables logging.
+log = { version = "0.4", features = ["max_level_info", "release_max_level_info"] }
+futures-util = { version = "=0.3.34", default-features = false, features = ["std", "sink"] }
+tokio = { version = "=1.53.1", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+
+[lints]
+workspace = true

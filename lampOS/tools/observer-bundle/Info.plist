@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>lamp-observer</string>
+    <key>CFBundleIdentifier</key><string>ai.autonomous.lamp.room-observer</string>
+    <key>CFBundleName</key><string>Lamp Room Observer</string>
+    <key>CFBundleDisplayName</key><string>Lamp Room Observer</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSMinimumSystemVersion</key><string>10.15</string>
+    <key>LSUIElement</key><true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Record local room audio to compare the iMac's test speech with Lamp's spoken replies. Recordings stay in the test folder you choose.</string>
+</dict>
+</plist>

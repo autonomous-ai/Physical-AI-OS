@@ -1,0 +1,25 @@
+[package]
+name = "lamp-observer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+hound.workspace = true
+sha2.workspace = true
+rtrb.workspace = true
+rustix = { version = "1.1", features = ["fs"] }
+lamp-ipc = { path = "../ipc" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cpal.workspace = true
+objc2 = "0.6.5"
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVCaptureDevice", "AVMediaFormat", "block2"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString"] }
+block2 = "0.6.2"
+
+[lints]
+workspace = true

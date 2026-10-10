@@ -1,0 +1,20 @@
+[package]
+name = "lamp-camera"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+lamp-interaction = { path = "../interaction" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+lamp-ipc = { path = "../ipc" }
+rustix = { version = "=1.1.5", features = ["fs", "process"] }
+v4l2r = "=0.0.8"
+
+[build-dependencies]
+sha2.workspace = true
+
+[lints]
+workspace = true

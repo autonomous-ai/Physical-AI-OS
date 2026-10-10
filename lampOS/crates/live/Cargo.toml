@@ -1,0 +1,28 @@
+[package]
+name = "lamp-live"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rtrb.workspace = true
+sha2.workspace = true
+hound.workspace = true
+lamp-interaction = { path = "../interaction" }
+lamp-ipc = { path = "../ipc" }
+lamp-audio = { path = "../audio" }
+lamp-camera = { path = "../camera" }
+lamp-gemini = { path = "../gemini" }
+tokio = { version = "=1.53.1", features = ["rt", "time", "macros"] }
+rustix = { version = "=1.1.5", features = ["fs", "process"] }
+sonora-agc2 = "=0.2.0"
+sonora-simd = "=0.2.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpiocdev = "=0.8.0"
+
+[lints]
+workspace = true

@@ -1,0 +1,3 @@
+# Resolve the camera UAPI bundle from this standalone workspace, not host media headers.
+[env]
+V4L2R_VIDEODEV2_H_PATH = { value = "vendor/linux-uapi-v6.12-adc218676eef/include", relative = true, force = true }

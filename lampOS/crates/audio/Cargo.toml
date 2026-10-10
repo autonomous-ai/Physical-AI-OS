@@ -1,0 +1,24 @@
+[package]
+name = "lamp-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sonora = "=0.2.0"
+serde.workspace = true
+serde_json.workspace = true
+hound.workspace = true
+sha2.workspace = true
+lamp-interaction = { path = "../interaction" }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", features = ["fs"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+lamp-ipc = { path = "../ipc" }
+alsa = "=0.12.1"
+
+[lints]
+workspace = true

@@ -1,0 +1,193 @@
+{
+  "project": "Linux userspace media UAPI subset",
+  "repository": "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git",
+  "tag": "v6.12",
+  "commit": "adc218676eef25575469234709c2d87185ca223a",
+  "source_url_template": "https://raw.githubusercontent.com/torvalds/linux/adc218676eef25575469234709c2d87185ca223a/{path}",
+  "source_files": [
+    {
+      "path": "include/uapi/linux/videodev2.h",
+      "bytes": 106161,
+      "sha256": "8161dd789a5ac4cd622285ff56dc3f497bdad689e32ac609d5dc8c481e44227c",
+      "includes": [
+        "#include <sys/time.h>",
+        "#include <linux/compiler.h>",
+        "#include <linux/ioctl.h>",
+        "#include <linux/types.h>",
+        "#include <linux/v4l2-common.h>",
+        "#include <linux/v4l2-controls.h>"
+      ],
+      "spdx": "/* SPDX-License-Identifier: ((GPL-2.0+ WITH Linux-syscall-note) OR BSD-3-Clause) */"
+    },
+    {
+      "path": "include/uapi/linux/v4l2-common.h",
+      "bytes": 2082,
+      "sha256": "d8f299f7aa92ad182d82ba721cc546e4a93421259bc1c19fbd676d4c6f6de47d",
+      "includes": [
+        "#include <linux/types.h>"
+      ],
+      "spdx": "/* SPDX-License-Identifier: ((GPL-2.0+ WITH Linux-syscall-note) OR BSD-3-Clause) */"
+    },
+    {
+      "path": "include/uapi/linux/v4l2-controls.h",
+      "bytes": 149485,
+      "sha256": "85b0478bd5cf72c8c83b3f73d47ba4378b49738ac2302762320a8fa3122e3824",
+      "includes": [
+        "#include <linux/const.h>",
+        "#include <linux/types.h>"
+      ],
+      "spdx": "/* SPDX-License-Identifier: ((GPL-2.0+ WITH Linux-syscall-note) OR BSD-3-Clause) */"
+    },
+    {
+      "path": "LICENSES/preferred/GPL-2.0",
+      "bytes": 18729,
+      "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79",
+      "includes": [],
+      "spdx": "Valid-License-Identifier: GPL-2.0"
+    },
+    {
+      "path": "LICENSES/exceptions/Linux-syscall-note",
+      "bytes": 1258,
+      "sha256": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f",
+      "includes": [],
+      "spdx": "SPDX-Exception-Identifier: Linux-syscall-note"
+    },
+    {
+      "path": "COPYING",
+      "bytes": 496,
+      "sha256": "fb5a425bd3b3cd6071a3a9aff9909a859e7c1158d54d32e07658398cd67eb6a0",
+      "includes": [],
+      "spdx": "The Linux Kernel is provided under:"
+    },
+    {
+      "path": "scripts/headers_install.sh",
+      "bytes": 2779,
+      "sha256": "67588ef43a09b582cda5105db6c8072da12b14fca3d6334093b0726542ac65e4",
+      "includes": [],
+      "spdx": "#!/bin/sh"
+    },
+    {
+      "path": "LICENSES/preferred/BSD-3-Clause",
+      "bytes": 1845,
+      "sha256": "7a83b1aeb460458db9a4bd521d7f237c45b1650f6e60ea5ffc71e49472454de3"
+    },
+    {
+      "path": "scripts/unifdef.c",
+      "bytes": 35672,
+      "sha256": "3d3523b648e4f8a76d443e8b3e0bc9b1a286a24736dc12c21c6d8379ff265dde"
+    }
+  ],
+  "exported_files": [
+    {
+      "path": "include/linux/videodev2.h",
+      "bytes": 103727,
+      "sha256": "81d95175596837bfd89a0645e2970dbddcb31f328cbdca4ebe88b3daecd19504",
+      "includes": [
+        "#include <sys/time.h>",
+        "#include <linux/ioctl.h>",
+        "#include <linux/types.h>",
+        "#include <linux/v4l2-common.h>",
+        "#include <linux/v4l2-controls.h>"
+      ]
+    },
+    {
+      "path": "include/linux/v4l2-common.h",
+      "bytes": 2056,
+      "sha256": "db7d65a8a88a520f43abc3821109a60e600ced91756027362059a16945802427",
+      "includes": [
+        "#include <linux/types.h>"
+      ]
+    },
+    {
+      "path": "include/linux/v4l2-controls.h",
+      "bytes": 149407,
+      "sha256": "d8b27bd5d3b3b03626dc2b87a522bb874218d5d0352e20931ee89e477c60f96b",
+      "includes": [
+        "#include <linux/const.h>",
+        "#include <linux/types.h>"
+      ]
+    },
+    {
+      "path": "include/videodev2.h",
+      "bytes": 29,
+      "sha256": "59b2db1e75ff6926fdec6a7d3c0eb25f49facde3a13c2925d15f89e13fad5a3e",
+      "origin": "Lamp build-only forwarding header"
+    }
+  ],
+  "license_files": [
+    {
+      "path": "LICENSES/BSD-3-Clause",
+      "source": "LICENSES/preferred/BSD-3-Clause",
+      "bytes": 1845,
+      "sha256": "7a83b1aeb460458db9a4bd521d7f237c45b1650f6e60ea5ffc71e49472454de3"
+    },
+    {
+      "path": "LICENSES/GPL-2.0",
+      "source": "LICENSES/preferred/GPL-2.0",
+      "bytes": 18729,
+      "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79"
+    },
+    {
+      "path": "LICENSES/Linux-syscall-note",
+      "source": "LICENSES/exceptions/Linux-syscall-note",
+      "bytes": 1258,
+      "sha256": "8e378ab93586eb55135d3bc119cce787f7324f48394777d00c34fa3d0be3303f"
+    }
+  ],
+  "license_expression": "(GPL-2.0+ WITH Linux-syscall-note) OR BSD-3-Clause",
+  "distribution_alternative": "BSD-3-Clause; preserve original dual-license identifiers and notices",
+  "generation": {
+    "script": "scripts/headers_install.sh",
+    "script_sha256": "67588ef43a09b582cda5105db6c8072da12b14fca3d6334093b0726542ac65e4",
+    "unifdef": "scripts/unifdef.c",
+    "unifdef_source_sha256": "3d3523b648e4f8a76d443e8b3e0bc9b1a286a24736dc12c21c6d8379ff265dde",
+    "gnu_sed": "4.9",
+    "gnu_sed_archive_url": "https://ftp.gnu.org/gnu/sed/sed-4.9.tar.xz",
+    "gnu_sed_archive_sha256": "6e226b732e1cd739464ad6862bd1a1aba42d7982922da7a53519631d24975181",
+    "locale": "C",
+    "source_or_script_changes": false,
+    "commands": [
+      "cc -O2 -o scripts/unifdef scripts/unifdef.c",
+      "LC_ALL=C sh scripts/headers_install.sh include/uapi/linux/videodev2.h export/include/linux/videodev2.h",
+      "LC_ALL=C sh scripts/headers_install.sh include/uapi/linux/v4l2-common.h export/include/linux/v4l2-common.h",
+      "LC_ALL=C sh scripts/headers_install.sh include/uapi/linux/v4l2-controls.h export/include/linux/v4l2-controls.h"
+    ],
+    "notes": "Run with GNU sed on PATH. Generated files are committed source inputs; export tools are not ordinary build or runtime dependencies."
+  },
+  "consumer_binding": {
+    "crate": "v4l2r",
+    "version": "0.0.8",
+    "checksum": "67d06043afd259b7e3f0b70bb8cc590b35c99006abc595399956392b4ebbe717",
+    "commit": "d4684ccc0d6b880c36d100ed8c09f47d6adb35c7",
+    "bindgen": "0.72.1"
+  },
+  "alternative_audit": [
+    {
+      "version": "0.0.5",
+      "sha256": "fe1d612d2df2a0802020c49a1b029282c45991cdfff1731b5fc61ed3dce4168a",
+      "av1": false,
+      "commit": "139c3418269b3a6d385037ec8ff1035249c4d390",
+      "vcs_path": "lib",
+      "yanked": false,
+      "bytes": 96117
+    },
+    {
+      "version": "0.0.6",
+      "sha256": "b4f8945ec08a0f9c9b3596c3437bfc8ed1e5c4feefcc230ecf5641aa9b44392b",
+      "av1": false,
+      "commit": "4db31cc68653cadcdebf02979186edcde8a38a09",
+      "vcs_path": "lib",
+      "yanked": false,
+      "bytes": 95618
+    },
+    {
+      "version": "0.0.7",
+      "sha256": "2b609e6cc820e3f95dac66f8ef4efbdf1f39b8d119ec16e6476f797ec95ebaa7",
+      "av1": true,
+      "commit": "7b441383125ae583017a1c18b3fc9ec6c88ddbe8",
+      "vcs_path": "lib",
+      "yanked": false,
+      "bytes": 96479
+    }
+  ]
+}

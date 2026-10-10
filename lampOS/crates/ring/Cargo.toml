@@ -1,0 +1,16 @@
+[package]
+name = "lamp-ring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+lamp-interaction = { path = "../interaction" }
+lamp-ipc = { path = "../ipc" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+spidev = "=0.7.1"
+
+[lints]
+workspace = true
