@@ -246,6 +246,10 @@ pub struct FakeProfile {
     /// The current runtime has no audible failure message; keep this false
     /// until the runtime implements one.
     pub spoken_failure_notice: bool,
+    /// Emit ring requests like `lamp-live --ring-channel-ceiling` (phase
+    /// changes only; the real policy also renews each static cue every 20 ms).
+    #[serde(default)]
+    pub ring_cues: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

@@ -129,6 +129,8 @@ pub struct PhysicalConfig {
     pub room_recorder: Option<Vec<String>>,
     pub room_independent: bool,
     pub allowance_seconds: u16,
+    /// Forwarded to lamp-live so ring cues are traced and checked.
+    pub ring_channel_ceiling: Option<u16>,
 }
 
 /// Keep refining the clock map during the session, within a bound.
@@ -503,6 +505,9 @@ impl Backend for PhysicalBackend<'_> {
                     argv.push("--diagnostics".into());
                 }
             }
+        }
+        if let Some(ceiling) = self.config.ring_channel_ceiling {
+            argv.extend(["--ring-channel-ceiling".into(), ceiling.to_string()]);
         }
         let mut child = Command::new(&argv[0])
             .args(&argv[1..])

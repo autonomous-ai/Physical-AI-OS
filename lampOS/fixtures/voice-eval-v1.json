@@ -24,7 +24,8 @@
       "echo": {"kind": "none"},
       "timing_speech_probability": 0.95,
       "timing_silence_probability": 0.05,
-      "spoken_failure_notice": false
+      "spoken_failure_notice": false,
+      "ring_cues": true
     },
     "v2-echo-leak-h4": {
       "description": "Same policy with one injected residual-echo burst 846 ms after the first accepted reply write, the admission timing observed in physical trial h4jds57i. This is fault injection, not an echo model.",
@@ -40,7 +41,8 @@
       "echo": {"kind": "leak", "after_first_write_ms": 846, "duration_ms": 120, "every_reply": false},
       "timing_speech_probability": 0.95,
       "timing_silence_probability": 0.05,
-      "spoken_failure_notice": false
+      "spoken_failure_notice": false,
+      "ring_cues": true
     },
     "v2-echo-loop": {
       "description": "Same policy with a residual-echo burst 600 ms after every reply's first write, so each spurious turn's answer can trigger the next. Reproduces the self-sustaining admission chain seen in zejfwxq7 (four admissions from one question). Fault injection, not an echo model.",
@@ -56,7 +58,8 @@
       "echo": {"kind": "leak", "after_first_write_ms": 600, "duration_ms": 120, "every_reply": true},
       "timing_speech_probability": 0.95,
       "timing_silence_probability": 0.05,
-      "spoken_failure_notice": false
+      "spoken_failure_notice": false,
+      "ring_cues": true
     }
   },
   "scenarios": [

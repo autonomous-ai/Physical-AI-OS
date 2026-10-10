@@ -63,7 +63,10 @@ pub struct StratumSummary {
     pub late_answers: usize,
     pub runtime_failures: usize,
     pub unannounced_failures: usize,
+    /// Stale output/cue, overlapping replies, unterminated turns, ring mismatch.
+    pub state_inconsistencies: usize,
     pub withheld_steps: usize,
+    pub ring_checked: usize,
     pub latencies: Vec<LatencySummary>,
     pub acoustic_scored: usize,
     pub acoustic_unscored: BTreeMap<String, usize>,
@@ -84,6 +87,7 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
             continue;
         }
         s.playback_minutes += score.playback_ms / 60_000.0;
+        s.ring_checked += usize::from(score.ring_checked);
         for step in &score.steps {
             if matches!(step.status, CheckStatus::Withheld { .. }) {
                 s.withheld_steps += 1;
@@ -157,6 +161,10 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
                 FindingKind::LateAnswer => s.late_answers += 1,
                 FindingKind::RuntimeFailure => s.runtime_failures += 1,
                 FindingKind::UnannouncedFailure => s.unannounced_failures += 1,
+                FindingKind::StaleOutput
+                | FindingKind::OverlappingOutput
+                | FindingKind::UnterminatedTurn
+                | FindingKind::RingMismatch => s.state_inconsistencies += 1,
                 _ => {}
             }
         }
@@ -343,6 +351,15 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
             ("Turn splits", s.turn_splits.to_string()),
             ("Late answers (right-censored)", s.late_answers.to_string()),
             ("Runtime failures", s.runtime_failures.to_string()),
+            (
+                "Voice/ring state inconsistencies through cancellation",
+                format!(
+                    "{} (ring requests checked in {}/{} attempts)",
+                    s.state_inconsistencies,
+                    s.ring_checked,
+                    s.attempts - s.invalid_excluded
+                ),
+            ),
             (
                 "Failures without a spoken notice",
                 s.unannounced_failures.to_string(),

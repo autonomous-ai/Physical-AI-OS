@@ -623,3 +623,95 @@ fn a_stale_trigger_withholds_the_stimulus_instead_of_playing_it_late() {
     );
     assert_ne!(score.outcome, Outcome::Passed);
 }
+
+#[test]
+fn voice_and_ring_state_stay_consistent_through_cancellation_and_breaks_are_detected() {
+    use lamp_voice_eval::events::{ClockDomain, EventSource, RuntimeEvent};
+    let s = setup();
+    let record = run(&s, "v2-directed-current", &["topic-change"], None).remove(0);
+    let clean = score(&s, &record);
+    assert!(clean.ring_checked, "the fake profile emits ring requests");
+    let consistency = [
+        FindingKind::StaleOutput,
+        FindingKind::RingMismatch,
+        FindingKind::OverlappingOutput,
+        FindingKind::UnterminatedTurn,
+    ];
+    assert!(
+        !kinds(&clean).iter().any(|k| consistency.contains(k)),
+        "{:?}",
+        clean.findings
+    );
+    let cancel_at = record
+        .events
+        .iter()
+        .find(|e| matches!(e.kind, EventKind::TurnCancelled { .. }) && e.turn == Some(1))
+        .and_then(|e| e.at_us)
+        .unwrap();
+    let event = |kind, turn, at| {
+        RuntimeEvent::new(
+            kind,
+            Some(turn),
+            at,
+            ClockDomain::Virtual,
+            EventSource::Fake,
+        )
+    };
+    type Mutation = Box<dyn Fn(&mut AttemptRecord)>;
+    let cases: Vec<(FindingKind, Mutation)> = vec![
+        // The revoked story keeps writing audio.
+        (
+            FindingKind::StaleOutput,
+            Box::new(move |r| {
+                r.events
+                    .push(event(EventKind::SpeechRetired, 1, cancel_at + 500_000))
+            }),
+        ),
+        // The ring keeps the revoked story's speaking cue.
+        (
+            FindingKind::StaleOutput,
+            Box::new(move |r| {
+                r.events.push(event(
+                    EventKind::RingRequested {
+                        phase: "speaking".into(),
+                    },
+                    1,
+                    cancel_at + 300_000,
+                ))
+            }),
+        ),
+        // The new turn shows a speaking cue before any audio was accepted.
+        (
+            FindingKind::RingMismatch,
+            Box::new(move |r| {
+                r.events.push(event(
+                    EventKind::RingRequested {
+                        phase: "speaking".into(),
+                    },
+                    2,
+                    cancel_at + 100_000,
+                ))
+            }),
+        ),
+        // The story is never revoked, so two replies play at once.
+        (
+            FindingKind::OverlappingOutput,
+            Box::new(|r| {
+                r.events.retain(|e| {
+                    !(matches!(e.kind, EventKind::TurnCancelled { .. }) && e.turn == Some(1))
+                })
+            }),
+        ),
+    ];
+    for (expected, mutate) in cases {
+        let mut broken = record.clone();
+        mutate(&mut broken);
+        let score = score(&s, &broken);
+        assert!(
+            kinds(&score).contains(&expected),
+            "{expected:?} not detected: {:?}",
+            score.findings
+        );
+        assert_eq!(score.outcome, Outcome::Failed);
+    }
+}

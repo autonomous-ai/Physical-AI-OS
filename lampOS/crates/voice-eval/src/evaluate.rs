@@ -43,6 +43,10 @@ pub enum FindingKind {
     StimulusNotDelivered,
     LateStimulus,
     IrrelevantAnswer,
+    StaleOutput,
+    OverlappingOutput,
+    UnterminatedTurn,
+    RingMismatch,
     OverlapNotAchieved,
     EvidenceMissing,
 }
@@ -214,6 +218,8 @@ pub struct AttemptScore {
     pub unattributed_admissions: usize,
     /// Software playback exposure (first write -> retirement/cancellation).
     pub playback_ms: f64,
+    /// Whether the trace contained ring requests to check against voice state.
+    pub ring_checked: bool,
     pub voices: usize,
     pub reproduce: String,
 }
@@ -883,6 +889,7 @@ pub fn score(
         admissions: 0,
         unattributed_admissions: 0,
         playback_ms: 0.0,
+        ring_checked: false,
         voices,
         reproduce: record.reproduce.clone(),
     };
@@ -983,6 +990,7 @@ pub fn score(
         return score;
     }
     analyse_cancellations(&mut cx);
+    score.ring_checked = consistency(&mut cx);
     let expects_failure = record
         .steps
         .iter()
@@ -1491,4 +1499,120 @@ fn review_findings(cx: &mut Context, steps: &mut [StepScore], annotations: &Anno
             }
         }
     }
+}
+
+/// Ordering tolerance between voice events and ring requests on one clock.
+const STATE_TOLERANCE_US: u64 = 50_000;
+
+/// Voice and ring state through cancellation: no output for a revoked turn,
+/// one speaking reply at a time, every turn terminated, and ring phases that
+/// match voice state. Returns whether ring requests were present to check.
+fn consistency(cx: &mut Context) -> bool {
+    let record = cx.record;
+    let tol = STATE_TOLERANCE_US;
+    let mut found: Vec<(FindingKind, Option<u64>, String)> = Vec::new();
+    let run_failed = record
+        .events
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::RunEnd { status: Some(s), .. } if s == "failed"));
+    for (turn, t) in &cx.turns {
+        if t.admitted.is_some() && t.completed.is_none() && t.cancelled.is_none() && !run_failed {
+            found.push((
+                FindingKind::UnterminatedTurn,
+                Some(*turn),
+                format!("turn {turn} has no completion or cancellation"),
+            ));
+        }
+    }
+    let mut ring = false;
+    for event in &record.events {
+        let (Some(turn), Some(at)) = (event.turn, event.at_us) else {
+            continue;
+        };
+        let Some(t) = cx.turns.get(&turn) else {
+            continue;
+        };
+        let revoked = t.cancelled.as_ref().map(|(c, _)| *c);
+        let output = matches!(
+            event.kind,
+            EventKind::SpeakerFirstWrite | EventKind::SpeechRetired | EventKind::PlaybackGap { .. }
+        );
+        if output && revoked.is_some_and(|c| at > c + tol) {
+            found.push((
+                FindingKind::StaleOutput,
+                Some(turn),
+                format!(
+                    "{} for turn {turn} {} ms after it was revoked",
+                    event.name(),
+                    (at - revoked.unwrap_or(at)) / 1000
+                ),
+            ));
+        }
+        let EventKind::RingRequested { phase } = &event.kind else {
+            continue;
+        };
+        ring = true;
+        let ended = t.completed.as_ref().map(|c| c.0).or(revoked);
+        if ended.is_some_and(|end| at > end + tol) {
+            found.push((
+                FindingKind::StaleOutput,
+                Some(turn),
+                format!("{phase} ring cue for turn {turn} after the turn ended"),
+            ));
+            continue;
+        }
+        let playing_from = t.first_write;
+        let playing_to = t.retired.or(revoked).or(ended);
+        let within = |from: Option<u64>, to: Option<u64>| {
+            from.is_some_and(|f| at + tol >= f) && to.is_none_or(|e| at <= e + tol)
+        };
+        let consistent = match phase.as_str() {
+            "listening" => within(t.decided().or(t.admitted), t.endpoint.or(ended)),
+            "speaking" => within(playing_from, playing_to),
+            "waiting" => {
+                t.endpoint.is_some_and(|e| at + tol >= e)
+                    && !(playing_from.is_some_and(|f| at > f + tol)
+                        && playing_to.is_none_or(|e| at + tol < e))
+            }
+            _ => false,
+        };
+        if !consistent {
+            found.push((
+                FindingKind::RingMismatch,
+                Some(turn),
+                format!("ring requested {phase} for turn {turn} when its voice state disagreed"),
+            ));
+        }
+    }
+    // One speaking reply at a time: a new first write must follow the
+    // previous reply's retirement or revocation.
+    let mut intervals: Vec<(u64, u64, u64)> = cx
+        .turns
+        .iter()
+        .filter_map(|(turn, t)| {
+            let start = t.first_write?;
+            let end = t
+                .retired
+                .or(t.cancelled.as_ref().map(|c| c.0))
+                .unwrap_or(u64::MAX);
+            Some((start, end, *turn))
+        })
+        .collect();
+    intervals.sort();
+    for pair in intervals.windows(2) {
+        let ((_, end, first), (start, _, second)) = (pair[0], pair[1]);
+        if start + tol < end {
+            found.push((
+                FindingKind::OverlappingOutput,
+                Some(second),
+                format!("turn {second} started playing while turn {first} was still playing"),
+            ));
+        }
+    }
+    found.sort();
+    found.dedup();
+    for (kind, turn, detail) in found {
+        cx.finding(kind, Severity::Failure, None, turn, detail);
+    }
+    ring
 }

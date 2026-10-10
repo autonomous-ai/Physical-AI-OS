@@ -152,6 +152,19 @@ impl FakeRuntime {
         ));
     }
 
+    /// A ring cue request, as the choreography policy derives it from the
+    /// turn's state (listening, waiting or speaking).
+    fn ring(&mut self, phase: &str, turn: u64) {
+        if self.profile.ring_cues {
+            self.emit(
+                EventKind::RingRequested {
+                    phase: phase.into(),
+                },
+                Some(turn),
+            );
+        }
+    }
+
     /// Start a stimulus at `at_us` (or now, if that has passed).
     pub fn inject(&mut self, timing: SceneTiming, pcm: Option<Arc<Vec<i16>>>, at_us: u64) -> u64 {
         let start_us = at_us.max(self.now_us);
@@ -312,6 +325,7 @@ impl FakeRuntime {
             Some(self.turn),
         );
         self.emit(EventKind::ProviderInputStarted, Some(self.turn));
+        self.ring("listening", self.turn);
         self.reply = Some(Reply {
             turn: self.turn,
             prefix_start_us,
@@ -365,6 +379,7 @@ impl FakeRuntime {
         };
         let now = self.now_us;
         reply.endpoint_us = Some(now);
+        self.ring("waiting", reply.turn);
         self.emit(
             EventKind::LocalEndpoint {
                 last_block_read_us: Some(last_block_us),
@@ -603,8 +618,12 @@ impl FakeRuntime {
         });
         let retired = reply.retire_at.is_some_and(|at| now >= at);
         let gaps = reply.gaps;
+        let started = events.contains(&EventKind::SpeakerFirstWrite);
         for kind in events {
             self.emit(kind, Some(turn));
+        }
+        if started {
+            self.ring("speaking", turn);
         }
         if interrupt {
             self.emit(EventKind::ProviderInterrupted, Some(turn));

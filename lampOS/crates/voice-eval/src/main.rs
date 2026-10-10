@@ -437,6 +437,8 @@ struct PhysicalFile {
     output_device: String,
     #[serde(default = "default_allowance")]
     allowance_seconds: u16,
+    #[serde(default)]
+    ring_channel_ceiling: Option<u16>,
 }
 fn default_noise() -> String {
     "on".into()
@@ -475,6 +477,7 @@ impl PhysicalFile {
                 room_recorder: self.room_recorder,
                 room_independent: self.room_independent,
                 allowance_seconds: self.allowance_seconds,
+                ring_channel_ceiling: self.ring_channel_ceiling,
             },
             self.output_device,
         ))

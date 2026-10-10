@@ -44,6 +44,8 @@ pub struct SessionOptions {
     /// Startup before readiness plus shutdown; added to `seconds` for the
     /// hard kill deadline. lamp-live's own startup bound is 25 s.
     pub allowance_seconds: u16,
+    /// Passed as `--ring-channel-ceiling`; without it no ring device opens.
+    pub ring_channel_ceiling: Option<u16>,
 }
 
 impl SessionOptions {
@@ -58,6 +60,7 @@ impl SessionOptions {
         let mut noise_suppression = "on".to_owned();
         let mut diagnostics = false;
         let mut allowance_seconds = 40;
+        let mut ring_channel_ceiling = None;
         let mut iter = arguments.iter();
         while let Some(flag) = iter.next() {
             let mut value = || {
@@ -76,6 +79,7 @@ impl SessionOptions {
                 "--noise-suppression" => noise_suppression = value()?,
                 "--allowance-seconds" => allowance_seconds = value()?.parse()?,
                 "--diagnostics" => diagnostics = true,
+                "--ring-channel-ceiling" => ring_channel_ceiling = Some(value()?.parse()?),
                 _ => return Err(invalid(&format!("unknown lamp-session option {flag}"))),
             }
         }
@@ -100,6 +104,7 @@ impl SessionOptions {
             noise_suppression,
             diagnostics,
             allowance_seconds,
+            ring_channel_ceiling,
         };
         if !(1..=600).contains(&options.seconds) || !(5..=120).contains(&options.allowance_seconds)
         {
@@ -152,6 +157,9 @@ impl SessionOptions {
                     argv.push("--diagnostics".into());
                 }
             }
+        }
+        if let Some(ceiling) = self.ring_channel_ceiling {
+            argv.extend(["--ring-channel-ceiling".into(), ceiling.to_string()]);
         }
         argv
     }
