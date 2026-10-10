@@ -1,0 +1,395 @@
+{
+  "version": 1,
+  "id": "voice-eval-v1",
+  "answer_deadline_ms": 15000,
+  "targets": {"answer_p50_ms": 2000, "answer_p95_ms": 4000, "yield_p95_ms": 200},
+  "fixed_reply": {
+    "text": "I'm doing well, thank you. I'm ready to chat or help with anything you need today.",
+    "frames": 107760,
+    "rate_hz": 24000,
+    "sha256": "d5bd0d6f880434b81846accf5181b9bf5ab28ac91479827aa9f73ddf8b52e144"
+  },
+  "profiles": {
+    "v2-directed-current": {
+      "description": "Mirrors the lamp-live directed policy at source 64529dee: every detected speech run is admitted and cancels any current reply. There is no addressee, acknowledgment or echo gate. Echo is cancelled perfectly in this profile.",
+      "startup_ms": 2000,
+      "first_audio_ms": 1300,
+      "first_audio_jitter_ms": 250,
+      "fixed_reply_first_audio_ms": 10,
+      "generation_speed_percent": 100,
+      "first_burst_ms": 120,
+      "speaker_dispatch_ms": 3,
+      "alsa_delay_ms": 20,
+      "cancel_tail_ms": 14,
+      "echo": {"kind": "none"},
+      "timing_speech_probability": 0.95,
+      "timing_silence_probability": 0.05,
+      "spoken_failure_notice": false
+    },
+    "v2-echo-leak-h4": {
+      "description": "Same policy with one injected residual-echo burst 846 ms after the first accepted reply write, the admission timing observed in physical trial h4jds57i. This is fault injection, not an echo model.",
+      "startup_ms": 2000,
+      "first_audio_ms": 1300,
+      "first_audio_jitter_ms": 250,
+      "fixed_reply_first_audio_ms": 10,
+      "generation_speed_percent": 100,
+      "first_burst_ms": 120,
+      "speaker_dispatch_ms": 3,
+      "alsa_delay_ms": 20,
+      "cancel_tail_ms": 14,
+      "echo": {"kind": "leak", "after_first_write_ms": 846, "duration_ms": 120, "every_reply": false},
+      "timing_speech_probability": 0.95,
+      "timing_silence_probability": 0.05,
+      "spoken_failure_notice": false
+    },
+    "v2-echo-loop": {
+      "description": "Same policy with a residual-echo burst 600 ms after every reply's first write, so each spurious turn's answer can trigger the next. Reproduces the self-sustaining admission chain seen in zejfwxq7 (four admissions from one question). Fault injection, not an echo model.",
+      "startup_ms": 2000,
+      "first_audio_ms": 1300,
+      "first_audio_jitter_ms": 250,
+      "fixed_reply_first_audio_ms": 10,
+      "generation_speed_percent": 100,
+      "first_burst_ms": 120,
+      "speaker_dispatch_ms": 3,
+      "alsa_delay_ms": 20,
+      "cancel_tail_ms": 14,
+      "echo": {"kind": "leak", "after_first_write_ms": 600, "duration_ms": 120, "every_reply": true},
+      "timing_speech_probability": 0.95,
+      "timing_silence_probability": 0.05,
+      "spoken_failure_notice": false
+    }
+  },
+  "scenarios": [
+    {
+      "id": "quick-chat", "cohort": "quick_chat", "capability": "conversation",
+      "description": "Direct greeting with one natural reply.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "A short, natural reply to how Lamp is doing."}
+      ],
+      "fake_replies": [{"text": "I'm doing well, thanks. How's your day going?", "speech_ms": 2600}]
+    },
+    {
+      "id": "quick-fact", "cohort": "quick_chat", "capability": "conversation",
+      "description": "Simple known answer.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quick-fact", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Four."}
+      ],
+      "fake_replies": [{"text": "Twelve divided by three is four.", "speech_ms": 1900}]
+    },
+    {
+      "id": "follow-up-chain", "cohort": "follow_up", "capability": "conversation",
+      "description": "A question followed by two quick context-dependent follow-ups, each triggered by the end of Lamp's previous answer.",
+      "provider": "gemini", "physical": true, "session_seconds": 120, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "mid-sentence-address", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Explains Rayleigh scattering of blue light."},
+        {"id": "why", "scene": "fast-followup", "trigger": {"after": "speech_retired", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Keeps the sky context: shorter wavelengths scatter more."},
+        {"id": "sunset", "scene": "follow-up-sunset", "trigger": {"after": "speech_retired", "delay_ms": 600, "deadline_ms": 30000}, "expect": "answer", "reference": "Keeps context: longer path through air scatters away blue light."}
+      ],
+      "fake_replies": [
+        {"text": "Sunlight scatters off air molecules, and blue light scatters the most, so the sky looks blue.", "speech_ms": 5200},
+        {"text": "Shorter wavelengths interact more strongly with tiny molecules, so blue is scattered more than red.", "speech_ms": 5000},
+        {"text": "At sunset the light crosses much more air, so most blue is scattered away and orange and red remain.", "speech_ms": 5400}
+      ]
+    },
+    {
+      "id": "short-yes", "cohort": "short_answer", "capability": "conversation",
+      "description": "Lamp asks a yes/no question and the person answers with one word.",
+      "provider": "gemini", "physical": true, "session_seconds": 90, "observe_ms": 5000,
+      "steps": [
+        {"id": "invite", "scene": "ask-yes-no", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Lamp asks one short yes/no question."},
+        {"id": "yes", "scene": "short-yes", "trigger": {"after": "speech_retired", "delay_ms": 800, "deadline_ms": 30000}, "expect": "answer", "reference": "Accepts yes in the context of Lamp's question."}
+      ],
+      "fake_replies": [
+        {"text": "Sure. Did you get enough sleep last night?", "speech_ms": 2400},
+        {"text": "Great, that makes a real difference.", "speech_ms": 2000}
+      ]
+    },
+    {
+      "id": "short-no", "cohort": "short_answer", "capability": "conversation",
+      "description": "Lamp asks a yes/no question and the person declines and changes topic.",
+      "provider": "gemini", "physical": true, "session_seconds": 90, "observe_ms": 5000,
+      "steps": [
+        {"id": "invite", "scene": "ask-yes-no", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Lamp asks one short yes/no question."},
+        {"id": "no", "scene": "short-no", "trigger": {"after": "speech_retired", "delay_ms": 700, "deadline_ms": 30000}, "expect": "answer", "reference": "Accepts the refusal and offers or follows a new topic."}
+      ],
+      "fake_replies": [
+        {"text": "Sure. Have you had coffee today?", "speech_ms": 2100},
+        {"text": "No problem. What would you like to talk about?", "speech_ms": 2300}
+      ]
+    },
+    {
+      "id": "long-answer", "cohort": "long_answer", "capability": "conversation",
+      "description": "A request for a story; Lamp's long answer must finish without self-interruption. No stimulus plays during the answer.",
+      "provider": "gemini", "physical": true, "session_seconds": 90, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "A short story about a friendly robot, delivered completely."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building. One night a storm knocked the power out, and Pip spent the evening carrying its little light from door to door so nobody felt alone.", "speech_ms": 14000}]
+    },
+    {
+      "id": "topic-change", "cohort": "topic_change", "capability": "interruption",
+      "description": "A natural topic change starts 1.2 s after Lamp's first accepted reply write.",
+      "provider": "gemini", "physical": true, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Starts the story; it is expected to be interrupted."},
+        {"id": "change", "scene": "topic-change", "trigger": {"after": "speaker_first_write", "delay_ms": 1200, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields, keeps the opening words and answers why coffee smells good."}
+      ],
+      "fake_replies": [
+        {"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building.", "speech_ms": 9000},
+        {"text": "Roasting creates hundreds of aromatic compounds, and they evaporate easily, so the smell reaches you quickly.", "speech_ms": 5600}
+      ]
+    },
+    {
+      "id": "topic-change-late", "cohort": "topic_change", "capability": "interruption",
+      "description": "The same topic change starting 4 s into Lamp's answer.",
+      "provider": "gemini", "physical": true, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Starts the story; it is expected to be interrupted."},
+        {"id": "change", "scene": "topic-change-late", "trigger": {"after": "speaker_first_write", "delay_ms": 4000, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields, keeps the opening words and answers why coffee smells good."}
+      ],
+      "fake_replies": [
+        {"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building.", "speech_ms": 9000},
+        {"text": "Roasting creates hundreds of aromatic compounds, and they evaporate easily, so the smell reaches you quickly.", "speech_ms": 5600}
+      ]
+    },
+    {
+      "id": "hesitant-sharing", "cohort": "hesitation", "capability": "conversation",
+      "description": "A long thought with an internal pause; it must remain one turn.",
+      "provider": "gemini", "physical": true, "session_seconds": 60, "observe_ms": 5000,
+      "steps": [
+        {"id": "share", "scene": "hesitant-sharing", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Waits for the whole thought, then responds to feeling unheard without reflexive advice."}
+      ],
+      "fake_replies": [{"text": "That sounds really frustrating. I'm listening, so tell me what happened.", "speech_ms": 3600}]
+    },
+    {
+      "id": "self-correction", "cohort": "correction", "capability": "conversation",
+      "description": "The person corrects the request mid-sentence.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "self-correction", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Thirty-six."}
+      ],
+      "fake_replies": [{"text": "Twelve times three is thirty-six.", "speech_ms": 1900}]
+    },
+    {
+      "id": "quiet-question", "cohort": "quiet_speech", "capability": "robustness",
+      "description": "The quick-fact question 18 dB quieter.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quiet-question", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Four."}
+      ],
+      "fake_replies": [{"text": "Twelve divided by three is four.", "speech_ms": 1900}]
+    },
+    {
+      "id": "rapid-question", "cohort": "rapid_speech", "capability": "robustness",
+      "description": "A question spoken at 240 words per minute.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "rapid-question", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "210 minutes."}
+      ],
+      "fake_replies": [{"text": "Three and a half hours is two hundred ten minutes.", "speech_ms": 2600}]
+    },
+    {
+      "id": "listener-acknowledgment", "cohort": "acknowledgment", "capability": "acknowledgment",
+      "description": "Mm-hmm 1.5 s after Lamp's first accepted reply write.",
+      "provider": "gemini", "physical": true, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Tells the whole story."},
+        {"id": "ack", "scene": "listener-acknowledgment", "trigger": {"after": "speaker_first_write", "delay_ms": 1500, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "no_interrupt", "reference": "Lamp keeps talking."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building. One night a storm knocked the power out, and Pip carried its little light from door to door.", "speech_ms": 12000}]
+    },
+    {
+      "id": "ack-yeah", "cohort": "acknowledgment", "capability": "acknowledgment",
+      "description": "Yeah 2.5 s after Lamp's first accepted reply write.",
+      "provider": "gemini", "physical": true, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Tells the whole story."},
+        {"id": "ack", "scene": "ack-yeah", "trigger": {"after": "speaker_first_write", "delay_ms": 2500, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "no_interrupt", "reference": "Lamp keeps talking."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building. One night a storm knocked the power out, and Pip carried its little light from door to door.", "speech_ms": 12000}]
+    },
+    {
+      "id": "ack-right", "cohort": "acknowledgment", "capability": "acknowledgment",
+      "description": "Right, okay 3.5 s after Lamp's first accepted reply write.",
+      "provider": "gemini", "physical": true, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Tells the whole story."},
+        {"id": "ack", "scene": "ack-right", "trigger": {"after": "speaker_first_write", "delay_ms": 3500, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "no_interrupt", "reference": "Lamp keeps talking."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building. One night a storm knocked the power out, and Pip carried its little light from door to door.", "speech_ms": 12000}]
+    },
+    {
+      "id": "colleague-aside", "cohort": "two_people", "capability": "restraint",
+      "description": "A quieter colleague remark 2 s into Lamp's answer.",
+      "provider": "gemini", "physical": true, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Tells the whole story."},
+        {"id": "aside", "scene": "colleague-aside", "trigger": {"after": "speaker_first_write", "delay_ms": 2000, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "no_interrupt", "reference": "Lamp keeps talking to its user."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building. One night a storm knocked the power out, and Pip carried its little light from door to door.", "speech_ms": 12000}]
+    },
+    {
+      "id": "two-colleagues", "cohort": "two_people", "capability": "restraint",
+      "description": "Two people talk to each other and mention the lamp.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 8000,
+      "steps": [
+        {"id": "talk", "scene": "two-colleagues", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "silence", "reference": "No reply and no social acknowledgment."}
+      ]
+    },
+    {
+      "id": "ambiguous-not-invited", "cohort": "two_people", "capability": "restraint",
+      "description": "An unaddressed question after two colleagues talk.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 8000,
+      "steps": [
+        {"id": "talk", "scene": "ambiguous-not-invited", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "silence", "reference": "No reply and no question whether it was addressed to Lamp."}
+      ]
+    },
+    {
+      "id": "overlapping-speakers", "cohort": "two_people", "capability": "conversation",
+      "description": "An addressed question overlapped by a quieter colleague.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "overlapping-speakers", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "An ocean fact, or a relevant clarification when unintelligible."}
+      ],
+      "fake_replies": [{"text": "The ocean holds most of the water on Earth, and we've explored only a small part of it.", "speech_ms": 4600}]
+    },
+    {
+      "id": "other-device", "cohort": "computer_audio", "capability": "restraint",
+      "description": "The person speaks to a different voice assistant, which replies.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 8000,
+      "steps": [
+        {"id": "talk", "scene": "other-device", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "silence", "reference": "No reply; no timer or action claim."}
+      ]
+    },
+    {
+      "id": "computer-call", "cohort": "computer_audio", "capability": "restraint",
+      "description": "A simulated call at the desk.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 8000,
+      "steps": [
+        {"id": "talk", "scene": "computer-call", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "silence", "reference": "No reply and no social acknowledgment."}
+      ]
+    },
+    {
+      "id": "background-media", "cohort": "computer_audio", "capability": "restraint",
+      "description": "Computer media that mentions a lamp.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 8000,
+      "steps": [
+        {"id": "media", "scene": "background-media", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "silence", "reference": "No reply."}
+      ]
+    },
+    {
+      "id": "noise-only", "cohort": "noise", "capability": "restraint",
+      "description": "Synthetic ventilation noise with no speech.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "noise", "scene": "noise-only", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "silence", "reference": "No reply."}
+      ]
+    },
+    {
+      "id": "noisy-question", "cohort": "noise", "capability": "robustness",
+      "description": "Addressed question over synthetic ventilation.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "noisy-question", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "An ocean fact."}
+      ],
+      "fake_replies": [{"text": "The deepest part of the ocean is nearly eleven kilometres down.", "speech_ms": 3400}]
+    },
+    {
+      "id": "typing-question", "cohort": "noise", "capability": "robustness",
+      "description": "Addressed question over synthetic keyboard clicks.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "typing-question", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Four."}
+      ],
+      "fake_replies": [{"text": "Twelve divided by three is four.", "speech_ms": 1900}]
+    },
+    {
+      "id": "fixed-reply-echo-only", "cohort": "echo_only", "capability": "echo",
+      "description": "Greeting, then the cached Lamp reply with no further stimulus. Repeats the h4jds57i condition: any later admission is self-interruption by playback.",
+      "provider": "fixed_reply", "physical": true, "session_seconds": 30, "observe_ms": 8000,
+      "steps": [
+        {"id": "greet", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "The cached reply plays completely."},
+        {"id": "listen", "scene": null, "trigger": {"after": "speaker_first_write", "delay_ms": 0, "deadline_ms": 15000}, "expect": "observe", "reference": "No admission while Lamp's own reply plays."}
+      ]
+    },
+    {
+      "id": "fixed-reply-acknowledgment", "cohort": "acknowledgment", "capability": "acknowledgment",
+      "description": "Mm-hmm during the cached Lamp reply.",
+      "provider": "fixed_reply", "physical": true, "session_seconds": 30, "observe_ms": 6000,
+      "steps": [
+        {"id": "greet", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "The cached reply plays completely."},
+        {"id": "ack", "scene": "listener-acknowledgment", "trigger": {"after": "speaker_first_write", "delay_ms": 1500, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "no_interrupt", "reference": "The cached reply continues."}
+      ]
+    },
+    {
+      "id": "fixed-reply-topic-change", "cohort": "topic_change", "capability": "interruption",
+      "description": "Topic change during the cached Lamp reply. The fixture provider has no second answer, so only yielding is scored.",
+      "provider": "fixed_reply", "physical": true, "session_seconds": 30, "observe_ms": 6000,
+      "steps": [
+        {"id": "greet", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "The cached reply starts; it is expected to be interrupted."},
+        {"id": "change", "scene": "topic-change", "trigger": {"after": "speaker_first_write", "delay_ms": 1200, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields promptly; the second answer is unsupported by the fixture provider."}
+      ]
+    },
+    {
+      "id": "provider-slow-first-audio", "cohort": "provider_delay", "capability": "provider_resilience",
+      "description": "Provider first audio arrives 3.5 s after the local endpoint.",
+      "provider": "gemini", "physical": false, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "A reply that arrives late but complete."}
+      ],
+      "fake_replies": [{"text": "I'm doing well, thanks. How's your day going?", "speech_ms": 2600}],
+      "fake_faults": [{"kind": "first_audio_delay", "turn": 1, "delay_ms": 3500}]
+    },
+    {
+      "id": "provider-late-answer", "cohort": "provider_delay", "capability": "provider_resilience",
+      "description": "Provider first audio arrives 16 s after the endpoint, beyond the 15 s answer deadline.",
+      "provider": "gemini", "physical": false, "session_seconds": 60, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quick-fact", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Four, within the answer deadline."}
+      ],
+      "fake_replies": [{"text": "Twelve divided by three is four.", "speech_ms": 1900}],
+      "fake_faults": [{"kind": "first_audio_delay", "turn": 1, "delay_ms": 16000}]
+    },
+    {
+      "id": "provider-supply-gap", "cohort": "provider_delay", "capability": "provider_resilience",
+      "description": "Provider audio stalls for 400 ms after 1.5 s of generated speech.",
+      "provider": "gemini", "physical": false, "session_seconds": 60, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "The whole story; the gap is a smoothness defect."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building.", "speech_ms": 9000}],
+      "fake_faults": [{"kind": "supply_gap", "turn": 1, "after_audio_ms": 1500, "gap_ms": 400}]
+    },
+    {
+      "id": "provider-failure-before-audio", "cohort": "provider_failure", "capability": "provider_resilience",
+      "description": "The provider fails 800 ms after the endpoint, before any audio.",
+      "provider": "gemini", "physical": false, "session_seconds": 45, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "honest_failure", "reference": "An explicit failure outcome and a spoken failure notice; never a fabricated completion."}
+      ],
+      "fake_faults": [{"kind": "fail_before_audio", "turn": 1, "after_endpoint_ms": 800}]
+    },
+    {
+      "id": "provider-disconnect-mid-reply", "cohort": "provider_disconnect", "capability": "provider_resilience",
+      "description": "The provider connection drops after 2 s of generated speech.",
+      "provider": "gemini", "physical": false, "session_seconds": 60, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "honest_failure", "reference": "Playback stops, the turn ends as failed and a spoken failure notice follows."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building.", "speech_ms": 9000}],
+      "fake_faults": [{"kind": "disconnect_mid_reply", "turn": 1, "after_audio_ms": 2000}]
+    },
+    {
+      "id": "provider-spurious-interrupt", "cohort": "provider_failure", "capability": "provider_resilience",
+      "description": "The provider reports an interruption 1.5 s into playback although nobody spoke.",
+      "provider": "gemini", "physical": false, "session_seconds": 60, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "The whole story."}
+      ],
+      "fake_replies": [{"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building.", "speech_ms": 9000}],
+      "fake_faults": [{"kind": "spurious_interrupt", "turn": 1, "after_first_write_ms": 1500}]
+    }
+  ]
+}
