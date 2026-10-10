@@ -1,13 +1,14 @@
 //! Readable and machine-readable reports. Every stratum is summarized on its
 //! own; denominators are explicit and withheld/unscored items are listed.
 use crate::{
+    canary::CanaryResult,
     evaluate::{
         AnswerOutcome, AttemptScore, CheckStatus, Evidence, FindingKind, Metric, MetricKind,
         Outcome, Severity, StepScore,
     },
     events::EventKind,
     plan::{Expectation, Targets},
-    record::{AttemptRecord, Stratum},
+    record::{AttemptRecord, StimulusSource, Stratum},
     stats::{Distribution, distribution},
 };
 use serde::Serialize;
@@ -74,6 +75,7 @@ pub struct StratumSummary {
     pub late_answers: usize,
     pub runtime_failures: usize,
     pub unannounced_failures: usize,
+    pub no_recovery: usize,
     /// Stale output/cue, overlapping replies, unterminated turns, ring mismatch.
     pub state_inconsistencies: usize,
     pub withheld_steps: usize,
@@ -209,6 +211,7 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
                     Expectation::Answer
                         | Expectation::InterruptAndAnswer
                         | Expectation::HonestFailure
+                        | Expectation::RecoverAndAnswer
                 )
             {
                 match step.lost_opening_ms {
@@ -235,6 +238,7 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
                 FindingKind::LateAnswer => s.late_answers += 1,
                 FindingKind::RuntimeFailure => s.runtime_failures += 1,
                 FindingKind::UnannouncedFailure => s.unannounced_failures += 1,
+                FindingKind::NoRecovery => s.no_recovery += 1,
                 FindingKind::StaleOutput
                 | FindingKind::OverlappingOutput
                 | FindingKind::UnterminatedTurn
@@ -283,14 +287,24 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
 }
 
 #[derive(Debug, Serialize)]
+pub struct StratumGroup {
+    pub stratum: Stratum,
+    pub source: StimulusSource,
+    pub summary: StratumSummary,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Report<'a> {
     pub run_id: String,
     pub plan_id: String,
     pub plan_sha256: String,
-    pub strata: BTreeMap<Stratum, StratumSummary>,
+    /// One group per (stratum, stimulus source); groups are never pooled.
+    pub strata: Vec<StratumGroup>,
     pub attempts: &'a [AttemptScore],
     pub limitations: Vec<String>,
     pub incomplete_ledger: Vec<String>,
+    /// Injected-failure canaries run with this evaluator before scoring.
+    pub self_test: Vec<CanaryResult>,
 }
 
 pub fn build<'a>(
@@ -299,14 +313,22 @@ pub fn build<'a>(
     plan_sha256: &str,
     scores: &'a [AttemptScore],
     incomplete_ledger: Vec<String>,
+    self_test: Vec<CanaryResult>,
 ) -> Report<'a> {
-    let mut grouped: BTreeMap<Stratum, Vec<&AttemptScore>> = BTreeMap::new();
+    let mut grouped: BTreeMap<(Stratum, StimulusSource), Vec<&AttemptScore>> = BTreeMap::new();
     for score in scores {
-        grouped.entry(score.stratum).or_default().push(score);
+        grouped
+            .entry((score.stratum, score.source))
+            .or_default()
+            .push(score);
     }
     let strata = grouped
         .into_iter()
-        .map(|(k, v)| (k, summarize(&v)))
+        .map(|((stratum, source), v)| StratumGroup {
+            stratum,
+            source,
+            summary: summarize(&v),
+        })
         .collect();
     Report {
         run_id: run_id.into(),
@@ -316,6 +338,7 @@ pub fn build<'a>(
         attempts: scores,
         limitations: limitations(scores),
         incomplete_ledger,
+        self_test,
     }
 }
 
@@ -328,6 +351,18 @@ fn limitations(scores: &[AttemptScore]) -> Vec<String> {
     ];
     if scores.iter().any(|s| s.voices > 1) {
         notes.push("Several synthetic voices played from one loudspeaker cannot establish spatial speaker discrimination; multi-voice scenarios test restraint under single-source playback only.".into());
+    }
+    if scores
+        .iter()
+        .any(|s| s.source == StimulusSource::LoudspeakerSynthetic)
+    {
+        notes.push("Synthetic voices replayed on a loudspeaker are a separate cohort from direct human speech. The Jieli board's onboard processing may treat them differently, so loudspeaker results do not establish human-speech behavior.".into());
+    }
+    if scores
+        .iter()
+        .any(|s| s.source == StimulusSource::DirectHuman)
+    {
+        notes.push("Direct-human prompts record display time, not verified speech delivery. Timed attempts remain unscored; reviewed imports may use explicit declared turn attribution. Human reaction time, speech onset and overlap cannot be inferred from synthetic clip timing.".into());
     }
     if !scores.iter().any(|s| s.stratum.is_physical()) {
         notes.push("No physical attempts are in this report, so there is no positive physical overlap/interruption cohort here.".into());
@@ -362,6 +397,25 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
         "Plan `{}` (sha256 `{}`).\n",
         report.plan_id, report.plan_sha256
     );
+    let failures = report.self_test.iter().filter(|c| !c.detected).count();
+    if report.self_test.is_empty() {
+        let _ = writeln!(
+            out,
+            "**Evaluator self-test was not run; treat these scores as UNTRUSTED.**\n"
+        );
+    } else if failures > 0 {
+        let _ = writeln!(
+            out,
+            "**UNTRUSTED: {failures} of {} evaluator canaries were not detected.**\n",
+            report.self_test.len()
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "Evaluator self-test: all {} canaries behaved as expected (injected failures detected, clean controls passed).\n",
+            report.self_test.len()
+        );
+    }
     let _ = writeln!(out, "## Limits of this evidence\n");
     for note in &report.limitations {
         let _ = writeln!(out, "- {note}");
@@ -373,8 +427,9 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
             report.incomplete_ledger.join("; ")
         );
     }
-    for (stratum, s) in &report.strata {
-        let _ = writeln!(out, "\n## {}\n", stratum.label());
+    for group in &report.strata {
+        let (stratum, s) = (&group.stratum, &group.summary);
+        let _ = writeln!(out, "\n## {} ({})\n", stratum.label(), group.source.label());
         let outcomes: Vec<String> = s.outcomes.iter().map(|(k, v)| format!("{k} {v}")).collect();
         let _ = writeln!(out, "{} attempts: {}.\n", s.attempts, outcomes.join(", "));
         if s.invalid_excluded > 0 {
@@ -468,6 +523,10 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
                     s.ring_checked,
                     s.attempts - s.invalid_excluded
                 ),
+            ),
+            (
+                "Sessions that did not recover after a provider failure",
+                s.no_recovery.to_string(),
             ),
             (
                 "Failures without a spoken notice",
@@ -587,6 +646,26 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
             }
         );
     }
+    let _ = writeln!(
+        out,
+        "\n## Evaluator self-test\n\n| Canary | Must show | Result |\n|---|---|---|"
+    );
+    for canary in &report.self_test {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            canary.name,
+            canary.expects,
+            if canary.detected {
+                "ok".to_owned()
+            } else {
+                format!(
+                    "NOT DETECTED (outcome {:?}, findings {:?})",
+                    canary.outcome, canary.findings
+                )
+            }
+        );
+    }
     let failures: Vec<&AttemptScore> = report
         .attempts
         .iter()
@@ -628,7 +707,7 @@ pub fn attempt_markdown(record: &AttemptRecord, score: &AttemptScore) -> String 
     let _ = writeln!(out, "# Attempt `{}`\n", record.attempt_id);
     let _ = writeln!(
         out,
-        "Scenario `{}` ({:?}, {:?}), provider {:?}, repetition {}, order {}.\n\nStratum: {}.\n\nOutcome: **{}**{}.\n\nReproduce: `{}`\n",
+        "Scenario `{}` ({:?}, {:?}), provider {:?}, repetition {}, order {}.\n\nStratum: {}; stimulus source: {}.\n\nOutcome: **{}**{}.\n\nReproduce: `{}`\n",
         record.scenario,
         record.cohort,
         record.capability,
@@ -636,6 +715,7 @@ pub fn attempt_markdown(record: &AttemptRecord, score: &AttemptScore) -> String 
         record.repetition,
         record.order,
         record.stratum.label(),
+        record.source.label(),
         outcome_label(score.outcome),
         score
             .reason

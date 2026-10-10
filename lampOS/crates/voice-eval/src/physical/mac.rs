@@ -14,7 +14,7 @@ use crate::{
         protocol::{RunnerLine, SessionLine},
     },
     plan::{ProviderKind, Scenario, Step, TriggerEvent},
-    record::{ClockMapping, Stratum},
+    record::{ClockMapping, StimulusSource, Stratum},
     runner::{AttemptContext, Backend, Begin, Finished, Injection},
     stimulus::{AssetIndex, SceneTiming, StimulusCatalog},
 };
@@ -79,6 +79,43 @@ impl Player for ObserverPlayer {
     }
 }
 
+/// Direct-human prompts: at the trigger the operator console shows the line a
+/// person in the room should say now. Nothing is played and no sound is made.
+/// The prompt time is the only software boundary; reaction time and the actual
+/// speech onset must come from room audio.
+pub struct HumanPrompter {
+    pub speaker_label: String,
+}
+
+impl Player for HumanPrompter {
+    fn start(
+        &mut self,
+        _: &Path,
+        timing: &SceneTiming,
+        _: &Path,
+        _: &Path,
+    ) -> Result<JoinHandle<Value>> {
+        let shown = monotonic_us();
+        let lines: Vec<String> = timing.clips.iter().map(|clip| clip.text.clone()).collect();
+        eprintln!(
+            "\n>>> {} SAY NOW: {}\n",
+            self.speaker_label,
+            lines.join(" ... ")
+        );
+        let label = self.speaker_label.clone();
+        Ok(thread::spawn(move || {
+            json!({"valid": true, "status": "prompted_direct_human", "speaker_label": label,
+                "speech_delivery_verified": false,
+                "prompt_shown_host_monotonic_ns": shown * 1000, "lines": lines,
+                "boundary": "prompt shown; human speech onset is later and unmeasured in software"})
+        }))
+    }
+    fn describe(&self) -> Value {
+        json!({"kind": "direct human prompts", "speaker_label": self.speaker_label,
+            "note": "no playback; speech timing comes only from room audio"})
+    }
+}
+
 /// Loopback player for the fake lamp-live: sends the stimulus timing to the
 /// fake room socket instead of producing sound.
 pub struct FakeRoomPlayer {
@@ -131,6 +168,8 @@ pub struct PhysicalConfig {
     pub allowance_seconds: u16,
     /// Forwarded to lamp-live so ring cues are traced and checked.
     pub ring_channel_ceiling: Option<u16>,
+    /// Loudspeaker replay or direct human speech; never pooled.
+    pub stimulus_source: StimulusSource,
 }
 
 /// Keep refining the clock map during the session, within a bound.
@@ -207,6 +246,12 @@ impl<'a> PhysicalBackend<'a> {
     /// Convert one relay line into a runtime event, updating the clock map.
     fn handle(&mut self, line: SessionLine) -> Option<RuntimeEvent> {
         let received = monotonic_us();
+        // Human speech has no inferred onset window. Its timing must be
+        // reviewed; timed acceptance is withheld by the evaluator.
+        let path_allowance = match self.config.stimulus_source {
+            StimulusSource::DirectHuman => 0,
+            _ => 250_000,
+        };
         let session = self.session.as_mut()?;
         let mut event = match line {
             SessionLine::Pong { seq, lamp_us } => {
@@ -218,7 +263,7 @@ impl<'a> PhysicalBackend<'a> {
                         to: ClockDomain::LampMonotonic,
                         offset_us: lamp_us as i64 - midpoint as i64,
                         uncertainty_us: rtt / 2 + 1_000,
-                        path_allowance_us: 250_000,
+                        path_allowance_us: path_allowance,
                         method: format!(
                             "ping/pong over the session transport, best round trip {rtt} us"
                         ),
@@ -392,6 +437,7 @@ impl Backend for PhysicalBackend<'_> {
                 LampMode::Fixture { sha256, .. } => json!({"provider": "fixed_reply", "reply_sha256": sha256}),
                 LampMode::Directed { .. } => json!({"provider": "gemini", "cues": "unavailable: lamp-live directed emits no cue socket (proposal P1)"}),
             },
+            "stimulus_source": self.config.stimulus_source,
             "noise_suppression": self.config.noise_suppression,
             "lamp_diagnostics": self.config.diagnostics,
             "player": self.player.describe(),
@@ -408,6 +454,9 @@ impl Backend for PhysicalBackend<'_> {
     }
     fn domain(&self) -> ClockDomain {
         ClockDomain::RunnerMonotonic
+    }
+    fn source(&self) -> StimulusSource {
+        self.config.stimulus_source
     }
     fn unsupported(&self, scenario: &Scenario) -> Option<String> {
         if !scenario.physical {

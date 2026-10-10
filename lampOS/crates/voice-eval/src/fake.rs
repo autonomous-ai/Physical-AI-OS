@@ -19,7 +19,7 @@ use crate::{
     plan::{
         EchoModel, FakeProfile, FakeReply, FixedReply, ProviderFault, ProviderKind, Scenario, Step,
     },
-    record::{ClockMapping, Stratum},
+    record::{ClockMapping, StimulusSource, Stratum},
     runner::{AttemptContext, Backend, Begin, Finished, Injection},
     stimulus::{AssetIndex, SceneTiming, StimulusCatalog},
 };
@@ -80,6 +80,8 @@ pub struct FakeRuntime {
     first_turn: Option<u64>,
     reply: Option<Reply>,
     tails: Vec<(u64, u64)>,
+    /// Scheduled idle disconnect (fault injection).
+    idle_failure_at: Option<u64>,
     leaks: Vec<(u64, u64)>,
     out: VecDeque<RuntimeEvent>,
 }
@@ -114,6 +116,7 @@ impl FakeRuntime {
             first_turn: None,
             reply: None,
             tails: Vec::new(),
+            idle_failure_at: None,
             leaks: Vec::new(),
             out: VecDeque::new(),
         };
@@ -247,6 +250,9 @@ impl FakeRuntime {
         }
         self.speaker_step();
         self.provider_step();
+        if self.idle_failure_at.is_some_and(|at| self.now_us >= at) {
+            self.fail("provider disconnected between turns (fault injection)");
+        }
         if self.ended {
             return;
         }
@@ -646,6 +652,9 @@ impl FakeRuntime {
                 Some(turn),
             );
             self.reply = None;
+            if let Some(ProviderFault::DisconnectAfterTurn { after_ms, .. }) = self.fault(turn) {
+                self.idle_failure_at = Some(now + u64::from(*after_ms) * 1000);
+            }
         }
     }
 }
@@ -703,6 +712,13 @@ impl Backend for FakeBackend<'_> {
     }
     fn domain(&self) -> ClockDomain {
         ClockDomain::Virtual
+    }
+    fn source(&self) -> StimulusSource {
+        if self.assets.is_some() {
+            StimulusSource::DigitalMix
+        } else {
+            StimulusSource::DeclaredTiming
+        }
     }
     fn profile(&self) -> Option<String> {
         Some(self.profile_id.clone())

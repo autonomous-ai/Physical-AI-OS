@@ -61,6 +61,7 @@ fn import(dir: &Path, metadata: &Path) -> AttemptRecord {
             turn_map: Vec::new(),
             room_metadata: Some(metadata),
             room_independent: true,
+            source: lamp_voice_eval::record::StimulusSource::Unknown,
         },
         &out,
     )

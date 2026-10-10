@@ -254,7 +254,7 @@
       "description": "An addressed question overlapped by a quieter colleague.",
       "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 5000,
       "steps": [
-        {"id": "ask", "scene": "overlapping-speakers", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "An ocean fact, or a relevant clarification when unintelligible."}
+        {"id": "ask", "scene": "overlapping-speakers", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "An ocean fact, or a relevant clarification when unintelligible.", "addressed": ["owner-noisy"]}
       ],
       "fake_replies": [{"text": "The ocean holds most of the water on Earth, and we've explored only a small part of it.", "speech_ms": 4600}]
     },
@@ -334,6 +334,109 @@
         {"id": "greet", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "The cached reply starts; it is expected to be interrupted."},
         {"id": "change", "scene": "topic-change", "trigger": {"after": "speaker_first_write", "delay_ms": 1200, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields promptly; the second answer is unsupported by the fixture provider."}
       ]
+    },
+    {
+      "id": "rapid-follow-up", "cohort": "follow_up", "capability": "conversation",
+      "description": "A follow-up asked 150 ms after Lamp's answer ends.",
+      "provider": "gemini", "physical": true, "session_seconds": 90, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "mid-sentence-address", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Explains why the sky looks blue."},
+        {"id": "rapid", "scene": "rapid-followup", "trigger": {"after": "speech_retired", "delay_ms": 150, "deadline_ms": 30000}, "expect": "answer", "reference": "Keeps the sky context."}
+      ],
+      "fake_replies": [
+        {"text": "Sunlight scatters off air molecules, and blue light scatters the most.", "speech_ms": 4200},
+        {"text": "Shorter wavelengths interact more strongly with tiny molecules.", "speech_ms": 3600}
+      ]
+    },
+    {
+      "id": "unfinished-question-pause", "cohort": "unfinished_question", "capability": "conversation",
+      "description": "The person pauses 1.4 s mid-question, then finishes it.",
+      "provider": "gemini", "physical": true, "session_seconds": 60, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "unfinished-pause", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "One answer to the whole question: Venus."}
+      ],
+      "fake_replies": [{"text": "Venus. One day there lasts longer than its year.", "speech_ms": 3200}]
+    },
+    {
+      "id": "unfinished-question-resume", "cohort": "unfinished_question", "capability": "interruption",
+      "description": "Lamp starts replying to half a question; the person finishes it 300 ms into that reply.",
+      "provider": "gemini", "physical": true, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "start", "scene": "unfinished-start", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "fragment", "reference": "Ideally Lamp waits; a reply to the fragment is judged by the continuation."},
+        {"id": "finish", "scene": "unfinished-continue", "trigger": {"after": "speaker_first_write", "delay_ms": 300, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields and answers the whole question: Venus."}
+      ],
+      "fake_replies": [
+        {"text": "Sorry, which planet has the what?", "speech_ms": 2200},
+        {"text": "Venus. One day there lasts longer than its year.", "speech_ms": 3200}
+      ]
+    },
+    {
+      "id": "repeated-interruptions", "cohort": "repeated_interruption", "capability": "interruption",
+      "description": "Three natural topic changes in a row, each started from the newest answer's first write.",
+      "provider": "gemini", "physical": true, "session_seconds": 120, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Starts the story; it is expected to be interrupted."},
+        {"id": "coffee", "scene": "topic-change", "trigger": {"after": "speaker_first_write", "delay_ms": 1200, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields and starts answering about coffee."},
+        {"id": "sky", "scene": "interrupt-sky", "trigger": {"after": "speaker_first_write", "delay_ms": 1500, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields again and starts answering about the sky."},
+        {"id": "ocean", "scene": "interrupt-ocean", "trigger": {"after": "speaker_first_write", "delay_ms": 1000, "deadline_ms": 15000, "require_lamp_speaking": true}, "expect": "interrupt_and_answer", "reference": "Yields again and gives a complete ocean fact."}
+      ],
+      "fake_replies": [
+        {"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building.", "speech_ms": 9000},
+        {"text": "Roasting creates hundreds of aromatic compounds that evaporate easily.", "speech_ms": 5000},
+        {"text": "Sunlight scatters off air molecules, and blue light scatters the most.", "speech_ms": 4600},
+        {"text": "The ocean holds most of the water on Earth.", "speech_ms": 3000}
+      ]
+    },
+    {
+      "id": "background-conversation-question", "cohort": "background_conversation", "capability": "restraint",
+      "description": "The owner asks a question while two colleagues talk quietly nearby.",
+      "provider": "gemini", "physical": true, "session_seconds": 45, "observe_ms": 8000,
+      "steps": [
+        {"id": "ask", "scene": "background-chat-question", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "Four; no reply to the colleagues.", "addressed": ["math"]}
+      ],
+      "fake_replies": [{"text": "Twelve divided by three is four.", "speech_ms": 1900}]
+    },
+    {
+      "id": "slow-response-then-follow-up", "cohort": "provider_delay", "capability": "provider_resilience",
+      "description": "The first answer arrives after 9 s; the conversation must then continue normally.",
+      "provider": "gemini", "physical": false, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "A late but complete reply."},
+        {"id": "next", "scene": "recovery-question", "trigger": {"after": "speech_retired", "delay_ms": 3000, "deadline_ms": 30000}, "expect": "answer", "reference": "Four, at normal speed."}
+      ],
+      "fake_replies": [
+        {"text": "I'm doing well, thanks. How's your day going?", "speech_ms": 2600},
+        {"text": "Twelve divided by three is four.", "speech_ms": 1900}
+      ],
+      "fake_faults": [{"kind": "first_audio_delay", "turn": 1, "delay_ms": 9000}]
+    },
+    {
+      "id": "disconnect-between-turns", "cohort": "recovery", "capability": "provider_resilience",
+      "description": "The provider drops 1 s after a completed answer; the next question 3 s later must still be answered.",
+      "provider": "gemini", "physical": false, "session_seconds": 60, "observe_ms": 5000,
+      "steps": [
+        {"id": "ask", "scene": "quick-chat", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "answer", "reference": "A short reply."},
+        {"id": "next", "scene": "recovery-question", "trigger": {"after": "speech_retired", "delay_ms": 3000, "deadline_ms": 30000}, "expect": "recover_and_answer", "reference": "Four, after reconnecting without the person noticing."}
+      ],
+      "fake_replies": [
+        {"text": "I'm doing well, thanks. How's your day going?", "speech_ms": 2600},
+        {"text": "Twelve divided by three is four.", "speech_ms": 1900}
+      ],
+      "fake_faults": [{"kind": "disconnect_after_turn", "turn": 1, "after_ms": 1000}]
+    },
+    {
+      "id": "disconnect-mid-reply-recovery", "cohort": "recovery", "capability": "provider_resilience",
+      "description": "The provider drops mid-answer; the person asks again 2 s after the answer stops.",
+      "provider": "gemini", "physical": false, "session_seconds": 75, "observe_ms": 5000,
+      "steps": [
+        {"id": "story", "scene": "story-primer", "trigger": {"after": "listening_ready", "delay_ms": 500, "deadline_ms": 30000}, "expect": "honest_failure", "reference": "Playback stops with an honest spoken failure notice."},
+        {"id": "again", "scene": "quick-fact", "trigger": {"after": "turn_cancelled", "delay_ms": 2000, "deadline_ms": 30000}, "expect": "recover_and_answer", "reference": "Four, in a recovered session."}
+      ],
+      "fake_replies": [
+        {"text": "Once there was a small robot named Pip who loved fixing lamps for the people in its building.", "speech_ms": 9000},
+        {"text": "Twelve divided by three is four.", "speech_ms": 1900}
+      ],
+      "fake_faults": [{"kind": "disconnect_mid_reply", "turn": 1, "after_audio_ms": 2000}]
     },
     {
       "id": "provider-slow-first-audio", "cohort": "provider_delay", "capability": "provider_resilience",

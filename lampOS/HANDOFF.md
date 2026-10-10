@@ -10,6 +10,14 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
+- Latest integration includes Agent 2 through `3eaa0365a` (42 scenarios,
+  21 evaluator canaries), plus prompted-human scoring and historical-plan fixes.
+  Source `30263f21` passed **712 host tests, zero failed or ignored**,
+  formatting, strict Clippy and both release builds. See
+  [integration evidence](docs/voice-eval-integration-20261011.md) for the full
+  identity, exact gates, reproduced failures and remaining qualification.
+  This adds no ARM64, cloud, device or acoustic result.
+
 - Agent 1 delivered Gemini reliability commit `fbf9ecc3c` on `gemini-voice`,
   directly above `23bde4873`. This checkpoint integrates it with
   [provider output credits](docs/provider-flow-control.md), reserving PCM space
@@ -20,7 +28,7 @@ parallel edits or integrating another agent's changes.
   needs Agent 1's playback-paced regression. See the linked protocol and
   [next 24-hour assignments](docs/development-workstreams.md).
 
-- The final combined source `670a905d` passed **696 host tests, zero failed or
+- The earlier combined source `670a905d` passed **696 host tests, zero failed or
   ignored**, formatting, strict workspace/all-target Clippy and release builds
   for `lamp-live` and `lamp-voice-eval`. The full source manifest is
   `670a905dfb3b01bd5724b98e8a8f38fc4787f46dc81f895ad6d6358ff6b411af`. Exact commands and
@@ -50,7 +58,7 @@ parallel edits or integrating another agent's changes.
   external Claude sessions for Gemini reliability (`crates/gemini/**` and
   `provider_worker.rs`) and the Rust voice acceptance runner (`crates/voice-eval/**`).
   Agent 1 has delivered the commit noted above. Agent 2 delivered the Rust
-  evaluator through `447fa188b` (six commits preserved), including 34 scenarios,
+  evaluator through `3eaa0365a` (ten commits preserved), including 42 scenarios,
   scripted fault injection and complete attempt reports. Integration review
   found answer-completion accounting and room-recording provenance defects;
   their fixes and final host verification are part of this checkpoint.

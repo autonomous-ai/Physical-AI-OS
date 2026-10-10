@@ -10,8 +10,8 @@ use crate::{
     ledger::{Ledger, unix_ms},
     plan::{LoadedPlan, Scenario, Step, TriggerEvent},
     record::{
-        AttemptRecord, AttemptStatus, Attribution, ClockMapping, StepRecord, StepStatus, Stratum,
-        TriggerObservation,
+        AttemptRecord, AttemptStatus, Attribution, ClockMapping, StepRecord, StepStatus,
+        StimulusSource, Stratum, TriggerObservation,
     },
     stimulus::{SceneTiming, StimulusCatalog},
 };
@@ -61,6 +61,7 @@ pub const MAX_TRIGGER_LATENESS_US: u64 = 100_000;
 pub trait Backend {
     fn describe(&self) -> Value;
     fn stratum(&self, scenario: &Scenario) -> Stratum;
+    fn source(&self) -> StimulusSource;
     fn domain(&self) -> ClockDomain;
     fn profile(&self) -> Option<String> {
         None
@@ -97,6 +98,8 @@ pub struct SuiteOptions {
     pub shuffle: bool,
     /// Reproduce one attempt exactly: use this attempt seed instead of deriving it.
     pub attempt_seed: Option<u64>,
+    /// Evaluator self-test results recorded in the run's first ledger row.
+    pub self_test: Value,
 }
 
 /// Runtime events seen live, in receipt order.
@@ -137,6 +140,7 @@ impl LiveView {
                             TriggerEvent::SpeakerFirstWrite
                         )
                         | (EventKind::SpeechRetired, TriggerEvent::SpeechRetired)
+                        | (EventKind::TurnCancelled { .. }, TriggerEvent::TurnCancelled)
                 );
                 kind && (after == TriggerEvent::ListeningReady
                     || event.turn.is_none_or(|turn| turn > known_turn))
@@ -289,6 +293,7 @@ pub fn run_attempt(
         capability: scenario.capability,
         provider: scenario.provider,
         stratum: backend.stratum(scenario),
+        source: backend.source(),
         repetition: context.repetition,
         order: context.order,
         profile: backend.profile(),
@@ -446,6 +451,7 @@ pub fn run_suite(
             "repetitions": options.repetitions,
             "shuffle": options.shuffle,
             "attempt_order": order,
+            "evaluator_self_test": options.self_test,
             "tool": {"package": env!("CARGO_PKG_NAME"), "version": env!("CARGO_PKG_VERSION"),
                      "os": std::env::consts::OS, "arch": std::env::consts::ARCH},
             "started_unix_ms": unix_ms(),
@@ -481,6 +487,7 @@ pub fn run_suite(
                 "repetition": repetition,
                 "order": order_index,
                 "stratum": backend.stratum(scenario),
+                "stimulus_source": backend.source(),
                 "expected": scenario.steps.iter().map(|s| json!({
                     "step": s.id, "scene": s.scene, "expect": s.expect,
                     "trigger": s.trigger, "reference": s.reference})).collect::<Vec<_>>(),

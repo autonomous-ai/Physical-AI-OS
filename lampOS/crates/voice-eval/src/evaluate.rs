@@ -5,7 +5,9 @@ use crate::{
     annotations::{AcousticScore, Annotations},
     events::{EventKind, RuntimeEvent},
     plan::{Capability, Cohort, Expectation, ProviderKind},
-    record::{AttemptRecord, AttemptStatus, Attribution, StepRecord, StepStatus, Stratum},
+    record::{
+        AttemptRecord, AttemptStatus, Attribution, StepRecord, StepStatus, StimulusSource, Stratum,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +44,7 @@ pub enum FindingKind {
     SessionEnded,
     NotReached,
     TriggerStale,
+    NoRecovery,
     StimulusNotDelivered,
     LateStimulus,
     IrrelevantAnswer,
@@ -239,6 +242,8 @@ pub struct AttemptScore {
     pub cohort: Cohort,
     pub capability: Capability,
     pub stratum: Stratum,
+    #[serde(default)]
+    pub source: StimulusSource,
     pub repetition: u32,
     pub outcome: Outcome,
     pub reason: Option<String>,
@@ -355,6 +360,9 @@ struct Window {
     to: u64,
     /// Clip intervals in the event domain, for lost-opening analysis.
     clips: Vec<(u64, u64)>,
+    utterances: Vec<String>,
+    /// Admission tolerance after a clip ends (clock uncertainty + path).
+    slack: u64,
 }
 
 struct Context<'a> {
@@ -375,6 +383,8 @@ struct Context<'a> {
     fully_played: BTreeSet<u64>,
     /// Declared-attribution stimulus steps with no declared turn.
     undeclared: BTreeSet<usize>,
+    /// Admissions of background (unaddressed) talk inside multi-talker scenes.
+    background: BTreeSet<u64>,
 }
 
 impl Context<'_> {
@@ -466,6 +476,12 @@ fn attribute(cx: &mut Context) -> Option<String> {
             None
         }
         Attribution::Timed => {
+            if record.source == StimulusSource::DirectHuman {
+                return Some(
+                    "human speech delivery and timing are unverified; a displayed prompt is not a speech boundary; review the recording and import explicit turn attribution"
+                        .into(),
+                );
+            }
             let Some(clock) = &record.clock else {
                 return Some("no clock mapping between stimulus and runtime clocks".into());
             };
@@ -498,6 +514,8 @@ fn attribute(cx: &mut Context) -> Option<String> {
                             )
                         })
                         .collect(),
+                    utterances: timing.clips.iter().map(|c| c.utterance.clone()).collect(),
+                    slack: 300_000 + tolerance + clock.path_allowance_us,
                 });
             }
             for (turn, at) in admissions {
@@ -572,7 +590,7 @@ fn analyse_cancellations(cx: &mut Context) {
                 };
                 let own_step = cx.step_of(turn);
                 match cx.step_of(cause) {
-                    Some(step) if own_step == Some(step) => {
+                    Some(step) if own_step == Some(step) && !cx.background.contains(&cause) => {
                         // One stimulus split into several turns; scored as a split.
                     }
                     Some(step)
@@ -585,9 +603,22 @@ fn analyse_cancellations(cx: &mut Context) {
                     }
                     Some(step) => {
                         let step_id = record.steps[step].step.clone();
+                        let source = if cx.background.contains(&cause) {
+                            "background speech".to_owned()
+                        } else {
+                            format!("{:?}", record.steps[step].expect)
+                        };
+                        let answered = cx
+                            .turns
+                            .get(&cause)
+                            .is_some_and(|t| t.first_write.is_some());
                         let detail = format!(
-                            "{state} reply of turn {turn} cancelled by turn {cause}, admitted from step '{step_id}' ({:?})",
-                            record.steps[step].expect
+                            "{state} reply of turn {turn} cancelled by turn {cause}, admitted from step '{step_id}' ({source}){}",
+                            if answered {
+                                "; that turn was then answered aloud"
+                            } else {
+                                ""
+                            }
                         );
                         cx.false_interrupted
                             .insert(turn, format!("false interruption by step {step_id}"));
@@ -925,6 +956,7 @@ pub fn score(
         cohort: record.cohort,
         capability: record.capability,
         stratum: record.stratum,
+        source: record.source,
         repetition: record.repetition,
         outcome: Outcome::Withheld,
         reason: None,
@@ -985,6 +1017,7 @@ pub fn score(
         interrupters: BTreeSet::new(),
         fully_played: BTreeSet::new(),
         undeclared: BTreeSet::new(),
+        background: BTreeSet::new(),
     };
     let trace_present = record
         .events
@@ -1037,12 +1070,19 @@ pub fn score(
         }
         return score;
     }
+    classify_background(&mut cx);
     analyse_cancellations(&mut cx);
     score.ring_checked = consistency(&mut cx);
-    let expects_failure = record
-        .steps
+    let expects_failure = record.steps.iter().any(|s| {
+        matches!(
+            s.expect,
+            Expectation::HonestFailure | Expectation::RecoverAndAnswer
+        )
+    });
+    let run_failed = record
+        .events
         .iter()
-        .any(|s| s.expect == Expectation::HonestFailure);
+        .any(|e| matches!(&e.kind, EventKind::RunEnd { status: Some(s), .. } if s == "failed"));
     let mut steps = Vec::new();
     for (index, step) in record.steps.iter().enumerate() {
         let turns = cx.attributed.get(&index).cloned().unwrap_or_default();
@@ -1056,6 +1096,24 @@ pub fn score(
             interruption: None,
             lost_opening_ms: None,
         };
+        // A session that ended after an injected failure, before the recovery
+        // request could be asked, did not recover: that is a failure.
+        if step.expect == Expectation::RecoverAndAnswer
+            && matches!(
+                step.status,
+                StepStatus::SessionEnded | StepStatus::TriggerMissed
+            )
+            && run_failed
+        {
+            cx.finding(FindingKind::NoRecovery, Severity::Failure, Some(&step.step), None,
+                "the session ended after the provider failure; the follow-up request could not be asked".into());
+            step_score.status = CheckStatus::Fail;
+            step_score.answer = Some(AnswerOutcome::Missing {
+                cause: "no recovery after provider failure".into(),
+            });
+            steps.push(step_score);
+            continue;
+        }
         if let Some((kind, detail)) = withheld_status(step) {
             cx.finding(
                 kind,
@@ -1094,13 +1152,41 @@ pub fn score(
             .is_some_and(|(onset, end)| end <= onset);
         let request = matches!(
             step.expect,
-            Expectation::Answer | Expectation::InterruptAndAnswer | Expectation::HonestFailure
+            Expectation::Answer
+                | Expectation::InterruptAndAnswer
+                | Expectation::HonestFailure
+                | Expectation::RecoverAndAnswer
         );
+        let fail = |status: &mut CheckStatus| *status = CheckStatus::Fail;
+        // In a multi-talker scene only admissions during addressed speech belong
+        // to the request; the rest are responses to background talk.
+        let (background, turns): (Vec<u64>, Vec<u64>) = turns
+            .into_iter()
+            .partition(|turn| cx.background.contains(turn));
         if let Some(&first) = turns.first().filter(|_| request) {
             step_score.lost_opening_ms = lost_opening(&mut cx, step, index, first);
             transcript_check(&mut cx, step, first);
         }
-        let fail = |status: &mut CheckStatus| *status = CheckStatus::Fail;
+        for &turn in &background {
+            // Counted once: as the false interruption it caused, if any.
+            if cx.interrupters.contains(&turn) {
+                continue;
+            }
+            let audible = cx.turns.get(&turn).is_some_and(|t| t.first_write.is_some());
+            cx.finding(
+                FindingKind::UnexpectedResponse,
+                Severity::Failure,
+                Some(&step.step),
+                Some(turn),
+                format!(
+                    "background speech admitted as turn {turn}{}",
+                    if audible { " and answered aloud" } else { "" }
+                ),
+            );
+        }
+        if !background.is_empty() && request {
+            fail(&mut step_score.status);
+        }
         // One request answered aloud more than once (for example after a split).
         let answered: Vec<u64> = turns
             .iter()
@@ -1121,7 +1207,14 @@ pub fn score(
             fail(&mut step_score.status);
         }
         match step.expect {
-            Expectation::Answer | Expectation::HonestFailure if turns.is_empty() => {
+            Expectation::Fragment => {
+                step_score.status = CheckStatus::Unscored {
+                    reason: "unfinished utterance; judged by the step that continues it".into(),
+                };
+            }
+            Expectation::Answer | Expectation::HonestFailure | Expectation::RecoverAndAnswer
+                if turns.is_empty() =>
+            {
                 cx.finding(
                     FindingKind::MissedInput,
                     Severity::Failure,
@@ -1132,7 +1225,7 @@ pub fn score(
                 step_score.answer = Some(AnswerOutcome::NotAdmitted);
                 fail(&mut step_score.status);
             }
-            Expectation::Answer => {
+            Expectation::Answer | Expectation::RecoverAndAnswer => {
                 if turns.len() > 1 {
                     cx.finding(FindingKind::TurnSplit, Severity::Failure, Some(&step.step), turns.last().copied(),
                         format!("one stimulus became {} turns ({turns:?}); earlier parts were cancelled", turns.len()));
@@ -1687,4 +1780,56 @@ fn consistency(cx: &mut Context) -> bool {
         cx.finding(kind, Severity::Failure, None, turn, detail);
     }
     ring
+}
+
+/// Mark admissions in multi-talker scenes whose captured input never overlaps
+/// an utterance addressed to Lamp: they are responses to background talk.
+fn classify_background(cx: &mut Context) {
+    let record = cx.record;
+    let mut background = BTreeSet::new();
+    let mut unknown = Vec::new();
+    for (index, turns) in &cx.attributed {
+        let step = &record.steps[*index];
+        if step.addressed.is_empty() {
+            continue;
+        }
+        let Some(window) = cx.windows.iter().find(|w| w.step == *index) else {
+            continue;
+        };
+        let addressed: Vec<(u64, u64)> = window
+            .clips
+            .iter()
+            .zip(&window.utterances)
+            .filter(|(_, id)| step.addressed.contains(id))
+            .map(|(clip, _)| *clip)
+            .collect();
+        for turn in turns {
+            let Some(t) = cx.turns.get(turn) else {
+                continue;
+            };
+            let from = t.prefix.or(t.decided()).unwrap_or(0);
+            let Some(to) = t.endpoint.or(t.terminal()) else {
+                // An unfinished capture has no known end. It cannot establish
+                // that the input excluded every addressed utterance.
+                unknown.push((step.step.clone(), *turn));
+                continue;
+            };
+            let hears_request = addressed.iter().any(|(start, end)| {
+                from <= end.saturating_add(window.slack) && to.saturating_add(20_000) >= *start
+            });
+            if !hears_request {
+                background.insert(*turn);
+            }
+        }
+    }
+    cx.background = background;
+    for (step, turn) in unknown {
+        cx.finding(
+            FindingKind::EvidenceMissing,
+            Severity::Withheld,
+            Some(&step),
+            Some(turn),
+            "background attribution is unknown: input has no endpoint or terminal event".into(),
+        );
+    }
 }

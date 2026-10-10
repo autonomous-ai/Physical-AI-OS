@@ -1,6 +1,7 @@
 use lamp_voice_eval::{
     Result,
     annotations::{self, Annotations},
+    canary::{self, CanaryResult},
     evaluate::{self, AttemptScore},
     fake::FakeBackend,
     import::{ImportOptions, import_trace},
@@ -8,11 +9,11 @@ use lamp_voice_eval::{
     ledger::{create_run_directory, read_rows, unix_ms, write_new_json},
     physical::{
         fake_lamp,
-        mac::{LampMode, ObserverPlayer, PhysicalBackend, PhysicalConfig},
+        mac::{HumanPrompter, LampMode, ObserverPlayer, PhysicalBackend, PhysicalConfig, Player},
         session::{self, SessionOptions},
     },
     plan::LoadedPlan,
-    record::AttemptRecord,
+    record::{AttemptRecord, StimulusSource},
     report,
     runner::{SuiteOptions, attempt_order, run_suite},
     stimulus::{AssetIndex, StimulusCatalog},
@@ -26,12 +27,12 @@ use std::{
 };
 
 const USAGE: &str = "usage:
-  lamp-voice-eval list | validate [--plan FILE]
+  lamp-voice-eval list | validate | self-test [--plan FILE]
   lamp-voice-eval fake-run --out NEW_DIR [--profile ID] [--scenario ID]... [--repetitions N]
       [--seed N] [--no-shuffle] [--attempt-seed N] [--cache DIR --manifest FILE...] [--plan FILE]
   lamp-voice-eval evaluate RUN_DIR [--annotations FILE] [--plan FILE]
   lamp-voice-eval import-trace --events FILE --scenario ID --out NEW_DIR [--turn STEP=TURN|none]...
-      [--room-metadata FILE] [--room-independent] [--plan FILE]
+      [--room-metadata FILE] [--room-independent] [--source loudspeaker_synthetic|direct_human] [--plan FILE]
   lamp-voice-eval annotation-template RUN_DIR NEW_FILE
   lamp-voice-eval assets --cache DIR --manifest FILE...
   lamp-voice-eval render-stimuli CACHE NEW_REPORT.json
@@ -116,6 +117,7 @@ fn suite_options(args: &mut Args, run_id: String) -> Result<SuiteOptions> {
         repetitions: args.take("--repetitions")?.map_or(Ok(1), |v| v.parse())?,
         seed: args.take("--seed")?.map_or(Ok(1), |v| v.parse())?,
         shuffle: !args.take_flag("--no-shuffle"),
+        self_test: Value::Null,
         attempt_seed: args
             .take("--attempt-seed")?
             .map(|v| v.parse())
@@ -223,6 +225,9 @@ fn run() -> Result<i32> {
             let assets = assets(&mut args, &catalog)?;
             args.done()?;
             let profile = plan.profile(&profile_id)?.clone();
+            let self_test = canary::run(&plan, &catalog)?;
+            let mut options = options;
+            options.self_test = serde_json::to_value(&self_test)?;
             create_run_directory(&out)?;
             let mut backend = FakeBackend::new(
                 &profile_id,
@@ -235,9 +240,24 @@ fn run() -> Result<i32> {
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, None))
                 .collect();
-            let directory =
-                write_evaluation(&out, &plan, &options.run_id, &records, &scores, Vec::new())?;
+            let directory = write_evaluation(
+                &out,
+                &plan,
+                &options.run_id,
+                &records,
+                &scores,
+                Vec::new(),
+                self_test.clone(),
+            )?;
             print_summary(&scores, &directory);
+            return Ok(trust_exit(&self_test));
+        }
+        "self-test" => {
+            let (catalog, plan) = load(&mut args)?;
+            args.done()?;
+            let results = canary::run(&plan, &catalog)?;
+            println!("{}", serde_json::to_string_pretty(&results)?);
+            return Ok(trust_exit(&results));
         }
         "evaluate" => {
             let run = PathBuf::from(args.positional()?);
@@ -256,8 +276,18 @@ fn run() -> Result<i32> {
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, annotations.as_ref()))
                 .collect();
-            let directory = write_evaluation(&run, &plan, &run_id, &records, &scores, problems)?;
+            let self_test = canary::run(&plan, &StimulusCatalog::load()?)?;
+            let directory = write_evaluation(
+                &run,
+                &plan,
+                &run_id,
+                &records,
+                &scores,
+                problems,
+                self_test.clone(),
+            )?;
             print_summary(&scores, &directory);
+            return Ok(trust_exit(&self_test));
         }
         "import-trace" => {
             let (catalog, plan) = load(&mut args)?;
@@ -288,6 +318,14 @@ fn run() -> Result<i32> {
                 .collect::<Result<Vec<_>>>()?;
             let room = args.take("--room-metadata")?.map(PathBuf::from);
             let room_independent = args.take_flag("--room-independent");
+            let source = match args.take("--source")?.as_deref() {
+                None => StimulusSource::Unknown,
+                Some("loudspeaker_synthetic") => StimulusSource::LoudspeakerSynthetic,
+                Some("direct_human") => StimulusSource::DirectHuman,
+                Some(_) => {
+                    return Err(invalid("--source is loudspeaker_synthetic or direct_human"));
+                }
+            };
             args.done()?;
             create_run_directory(&out)?;
             let run_id = run_id(&out);
@@ -301,13 +339,24 @@ fn run() -> Result<i32> {
                     turn_map,
                     room_metadata: room.as_deref(),
                     room_independent,
+                    source,
                 },
                 &out,
             )?;
             let scores = vec![evaluate::score(&record, plan.plan.answer_deadline_ms, None)];
             let records = vec![record];
-            let directory = write_evaluation(&out, &plan, &run_id, &records, &scores, Vec::new())?;
+            let self_test = canary::run(&plan, &catalog)?;
+            let directory = write_evaluation(
+                &out,
+                &plan,
+                &run_id,
+                &records,
+                &scores,
+                Vec::new(),
+                self_test.clone(),
+            )?;
             print_summary(&scores, &directory);
+            return Ok(trust_exit(&self_test));
         }
         "annotation-template" => {
             let run = PathBuf::from(args.positional()?);
@@ -377,12 +426,7 @@ fn run() -> Result<i32> {
             args.done()?;
             let file: PhysicalFile = serde_json::from_slice(&fs::read(&config_path)?)?;
             let config = file.into_config()?;
-            let output_device = config.1;
-            let mut backend = PhysicalBackend::new(
-                config.0,
-                &assets,
-                Box::new(ObserverPlayer { output_device }),
-            );
+            let mut backend = PhysicalBackend::new(config.0, &assets, config.1);
             if !execute {
                 use lamp_voice_eval::runner::Backend;
                 let order = attempt_order(&plan, &options)?;
@@ -405,14 +449,32 @@ fn run() -> Result<i32> {
                 );
                 return Ok(0);
             }
+            // Lamp time is scarce: never run a physical suite with an evaluator
+            // that fails to detect its own injected failures.
+            let self_test = canary::run(&plan, &catalog)?;
+            if !canary::all_detected(&self_test) {
+                eprintln!("{}", serde_json::to_string_pretty(&self_test)?);
+                return Err(invalid(
+                    "evaluator self-test failed; refusing to start a physical run",
+                ));
+            }
+            let mut options = options;
+            options.self_test = serde_json::to_value(&self_test)?;
             create_run_directory(&out)?;
             let records = run_suite(&plan, &catalog, &mut backend, &options, &out)?;
             let scores: Vec<AttemptScore> = records
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, None))
                 .collect();
-            let directory =
-                write_evaluation(&out, &plan, &options.run_id, &records, &scores, Vec::new())?;
+            let directory = write_evaluation(
+                &out,
+                &plan,
+                &options.run_id,
+                &records,
+                &scores,
+                Vec::new(),
+                self_test,
+            )?;
             print_summary(&scores, &directory);
         }
         _ => return Err(invalid(USAGE)),
@@ -437,11 +499,22 @@ struct PhysicalFile {
     room_recorder: Option<Vec<String>>,
     #[serde(default)]
     room_independent: bool,
-    output_device: String,
+    /// Required for loudspeaker replay; unused for direct human speech.
+    #[serde(default)]
+    output_device: Option<String>,
+    /// "loudspeaker_synthetic" (default) or "direct_human".
+    #[serde(default = "default_source")]
+    stimulus_source: StimulusSource,
+    /// Label (not a name) for the person speaking in direct-human runs.
+    #[serde(default)]
+    human_speaker: Option<String>,
     #[serde(default = "default_allowance")]
     allowance_seconds: u16,
     #[serde(default)]
     ring_channel_ceiling: Option<u16>,
+}
+fn default_source() -> StimulusSource {
+    StimulusSource::LoudspeakerSynthetic
 }
 fn default_noise() -> String {
     "on".into()
@@ -450,13 +523,29 @@ fn default_allowance() -> u16 {
     40
 }
 impl PhysicalFile {
-    fn into_config(self) -> Result<(PhysicalConfig, String)> {
+    fn into_config(self) -> Result<(PhysicalConfig, Box<dyn Player>)> {
         if self.lamp_command.is_empty() || !self.lamp_work_root.starts_with('/') {
             return Err(invalid(
                 "lamp_command must be nonempty and lamp_work_root absolute",
             ));
         }
-        lamp_observer::playback::validate_output_name(&self.output_device)?;
+        let player: Box<dyn Player> = match self.stimulus_source {
+            StimulusSource::LoudspeakerSynthetic => {
+                let output_device = self
+                    .output_device
+                    .ok_or_else(|| invalid("loudspeaker replay needs output_device"))?;
+                lamp_observer::playback::validate_output_name(&output_device)?;
+                Box::new(ObserverPlayer { output_device })
+            }
+            StimulusSource::DirectHuman => Box::new(HumanPrompter {
+                speaker_label: self.human_speaker.unwrap_or_else(|| "person-1".into()),
+            }),
+            _ => {
+                return Err(invalid(
+                    "stimulus_source must be loudspeaker_synthetic or direct_human",
+                ));
+            }
+        };
         let mode = match (
             self.fixture_reply,
             self.fixture_sha256,
@@ -481,8 +570,9 @@ impl PhysicalFile {
                 room_independent: self.room_independent,
                 allowance_seconds: self.allowance_seconds,
                 ring_channel_ceiling: self.ring_channel_ceiling,
+                stimulus_source: self.stimulus_source,
             },
-            self.output_device,
+            player,
         ))
     }
 }
@@ -540,6 +630,7 @@ fn write_evaluation(
     records: &[AttemptRecord],
     scores: &[AttemptScore],
     problems: Vec<String>,
+    self_test: Vec<CanaryResult>,
 ) -> Result<PathBuf> {
     let parent = run.join("evaluations");
     if !parent.exists() {
@@ -547,7 +638,14 @@ fn write_evaluation(
     }
     let directory = parent.join(unix_ms().to_string());
     create_run_directory(&directory)?;
-    let report = report::build(run_id, &plan.plan.id, &plan.sha256, scores, problems);
+    let report = report::build(
+        run_id,
+        &plan.plan.id,
+        &plan.sha256,
+        scores,
+        problems,
+        self_test,
+    );
     write_new_json(
         &directory.join("evaluation.json"),
         &serde_json::to_value(&report)?,
@@ -580,4 +678,15 @@ fn print_summary(scores: &[AttemptScore], directory: &Path) {
         "{}",
         json!({"attempts": scores.len(), "outcomes": counts, "report": directory.join("report.md")})
     );
+}
+
+/// Exit code 2 when the evaluator failed its self-test: the report exists but
+/// is marked untrusted.
+fn trust_exit(self_test: &[CanaryResult]) -> i32 {
+    if canary::all_detected(self_test) {
+        0
+    } else {
+        eprintln!("lamp-voice-eval: evaluator self-test failed; the report is marked UNTRUSTED");
+        2
+    }
 }

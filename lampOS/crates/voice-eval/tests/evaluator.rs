@@ -70,6 +70,7 @@ fn import(
             turn_map: Vec::new(),
             room_metadata: room_path.as_deref(),
             room_independent: false,
+            source: lamp_voice_eval::record::StimulusSource::Unknown,
         },
         &out,
     )
@@ -228,6 +229,7 @@ fn provider_mismatch_and_unknown_turns_are_rejected_on_import() {
                     turn_map,
                     room_metadata: None,
                     room_independent: false,
+                    source: lamp_voice_eval::record::StimulusSource::Unknown,
                 },
                 &out
             )
@@ -477,6 +479,7 @@ fn import_with(
             turn_map: turns,
             room_metadata: None,
             room_independent: false,
+            source: lamp_voice_eval::record::StimulusSource::Unknown,
         },
         &out,
     )
@@ -667,4 +670,56 @@ fn rates_exclude_invalid_attempts_and_unscored_opportunities() {
         "only the scored observe window"
     );
     assert_eq!(summary.false_interruption_opportunities.count, 1);
+}
+
+#[test]
+fn the_evaluator_detects_every_injected_failure_and_passes_clean_controls() {
+    let catalog = StimulusCatalog::load().unwrap();
+    let plan = LoadedPlan::default_plan(&catalog).unwrap();
+    let results = lamp_voice_eval::canary::run(&plan, &catalog).unwrap();
+    assert!(results.len() >= 20);
+    let missed: Vec<_> = results.iter().filter(|r| !r.detected).collect();
+    assert!(missed.is_empty(), "{missed:#?}");
+    assert!(results.iter().filter(|r| r.expects == "clean pass").count() >= 3);
+}
+
+#[test]
+fn loudspeaker_and_direct_human_attempts_are_reported_separately() {
+    use lamp_voice_eval::record::StimulusSource;
+    let dir = common::Private::new("src");
+    let loudspeaker = import(&dir.path, "ls", "fixed-reply-echo-only", &h4_trace(), None);
+    let mut human = loudspeaker.clone();
+    human.attempt_id.push_str("-human");
+    let mut loudspeaker = loudspeaker;
+    loudspeaker.source = StimulusSource::LoudspeakerSynthetic;
+    human.source = StimulusSource::DirectHuman;
+    let scores = vec![
+        evaluate::score(&loudspeaker, 15_000, None),
+        evaluate::score(&human, 15_000, None),
+    ];
+    let report = lamp_voice_eval::report::build("r", "p", "s", &scores, Vec::new(), Vec::new());
+    let sources: Vec<_> = report.strata.iter().map(|g| g.source).collect();
+    assert_eq!(
+        sources,
+        vec![
+            StimulusSource::LoudspeakerSynthetic,
+            StimulusSource::DirectHuman
+        ]
+    );
+    assert!(
+        report.strata.iter().all(|g| g.summary.attempts == 1),
+        "never pooled"
+    );
+    assert!(report.limitations.iter().any(|l| l.contains("Jieli")));
+    let markdown = lamp_voice_eval::report::markdown(
+        &report,
+        &LoadedPlan::default_plan(&StimulusCatalog::load().unwrap())
+            .unwrap()
+            .plan
+            .targets,
+    );
+    assert!(
+        markdown.contains("UNTRUSTED"),
+        "a report without a self-test is marked untrusted"
+    );
 }

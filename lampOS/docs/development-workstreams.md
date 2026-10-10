@@ -31,11 +31,12 @@ explicit outage/recovery/turn-failure contracts, narrow service probes when
 access permits, and Linux/ARM64 verification. Codex integrates coordinator
 contract changes. No accepted audio may be silently lost or replayed twice.
 
-Agent 2 delivered the Rust voice acceptance runner through `447fa188b`, with
-34 scenarios, fake-runtime fault injection, an attempt ledger and per-attempt
-reports. Continue by hardening this implementation, not rebuilding it: make
-recording provenance and answer-quality rates strict, then exercise real
-coordinator events after Codex adds the proposed directed-mode cue interface.
+Agent 2 delivered the Rust voice acceptance runner through `3eaa0365a`, with
+42 scenarios, 21 evaluator canaries, fake-runtime fault injection, an attempt
+ledger and per-attempt reports. Root integration preserves recording verification
+and answer-quality accounting, and fixes prompted-human scoring and historical
+plan compatibility. Continue hardening the relay and exercise real coordinator
+events after Codex adds the proposed directed-mode cue interface.
 Cover quick/long replies, pauses, topic changes, repeated interruption, background
 and multi-speaker speech, other-device speech, noise, failures/recovery and
 ring/voice consistency. Rank reproducible bugs and retain failed and
@@ -56,14 +57,15 @@ provider-credit IPC contract and is not silently fixed in the reporting patch.
 - Agent 1 delivered Gemini reliability at `fbf9ecc3c`; see its
   [integration handoff](gemini-session-reliability.md). Its reported verification
   is macOS/scripted-service only, not cloud or device qualification.
-- Agent 2 delivered six commits from `186253939` through `447fa188b`. Preserve
+- Agent 2 delivered ten commits from `186253939` through `3eaa0365a`. Preserve
   that history and its scenario/ledger format. The production provider-credit
   protocol does not change its CLI-level runner interface. Review fixes must
   keep invalid trials visible and require actual recording evidence before
   reporting acoustic results. Those two review defects are now fixed; see
   [answer accounting](voice-eval-answer-review.md) and
-  [recording verification](voice-eval-recording-evidence.md). The combined
-  696-test host gate is documented in [provider flow control](provider-flow-control.md).
+  [recording verification](voice-eval-recording-evidence.md). The earlier
+  696-test host gate is documented in [provider flow control](provider-flow-control.md);
+  the newer source is qualified separately in [integration evidence](voice-eval-integration-20261011.md).
 - [Provider output credits](provider-flow-control.md) add the strict control
   command `ProviderOutputCapacity { through }`. Count every provider packet,
   preserve counters across startup/turns/recovery, and return credits according

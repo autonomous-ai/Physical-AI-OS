@@ -252,7 +252,7 @@ fn failed_answers_stay_in_the_denominator_and_existing_exclusions_stay_explicit(
 #[test]
 fn readable_report_does_not_describe_unreviewed_playback_as_semantic_success() {
     let scores = [scored(json!("complete"), Value::Null, vec![])];
-    let report = report::build("test", "plan", "hash", &scores, vec![]);
+    let report = report::build("test", "plan", "hash", &scores, vec![], vec![]);
     let text = report::markdown(
         &report,
         &Targets {
@@ -264,6 +264,52 @@ fn readable_report_does_not_describe_unreviewed_playback_as_semantic_success() {
     assert!(text.contains("Complete playback, no known answer failure"));
     assert!(text.contains("without a complete content review"));
     assert!(text.contains("Unreviewed playback is not evidence of semantic success"));
+}
+
+#[test]
+fn separate_source_groups_preserve_reviewed_answer_denominators() {
+    use lamp_voice_eval::record::StimulusSource;
+    let mut accepted = scored(
+        json!("complete"),
+        json!({"complete":true,"relevant":true}),
+        vec![],
+    );
+    accepted.source = StimulusSource::DirectHuman;
+    let mut rejected = scored(
+        json!("complete"),
+        json!({"complete":true,"relevant":false}),
+        vec![finding(
+            "irrelevant_answer",
+            "failure",
+            "ask",
+            "room_annotation",
+        )],
+    );
+    rejected.source = StimulusSource::LoudspeakerSynthetic;
+    let scores = [accepted, rejected];
+    let report = report::build("test", "plan", "hash", &scores, vec![], vec![]);
+    let json = serde_json::to_value(report).unwrap();
+    let groups = json["strata"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    for group in groups {
+        let human = group["source"] == "direct_human";
+        let summary = &group["summary"];
+        ratio(summary, "complete_answers", usize::from(human), 1);
+        ratio(summary, "complete_playbacks", 1, 1);
+        assert_eq!(summary["complete_answers_reviewed"], usize::from(human));
+        assert_eq!(
+            summary["complete_playbacks_with_answer_failure"],
+            usize::from(!human)
+        );
+    }
+}
+
+#[test]
+fn source_specific_headings_do_not_call_humans_loudspeakers() {
+    use lamp_voice_eval::record::Stratum;
+    for stratum in [Stratum::PhysicalFixture, Stratum::PhysicalGemini] {
+        assert!(!stratum.label().contains("loudspeaker"));
+    }
 }
 
 fn imported(dir: &common::Private, two_replies: bool) -> AttemptRecord {
@@ -336,6 +382,7 @@ fn imported(dir: &common::Private, two_replies: bool) -> AttemptRecord {
             },
             room_metadata: Some(&metadata),
             room_independent: true,
+            source: lamp_voice_eval::record::StimulusSource::Unknown,
         },
         &output,
     )

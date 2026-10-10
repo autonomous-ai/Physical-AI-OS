@@ -69,6 +69,10 @@ pub enum Cohort {
     ComputerAudio,
     Noise,
     EchoOnly,
+    UnfinishedQuestion,
+    RepeatedInterruption,
+    BackgroundConversation,
+    Recovery,
     ProviderDelay,
     ProviderFailure,
     ProviderDisconnect,
@@ -128,6 +132,10 @@ pub struct Step {
     pub expect: Expectation,
     /// Reviewer hint for correctness; never scored automatically.
     pub reference: String,
+    /// Utterances in a multi-talker scene that address Lamp. Admissions during
+    /// the other clips are background responses, not parts of this request.
+    #[serde(default)]
+    pub addressed: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -139,6 +147,8 @@ pub enum TriggerEvent {
     SpeakerFirstWrite,
     /// ALSA retirement of that reply's final speech sample.
     SpeechRetired,
+    /// A reply revoked for any reason (lamp-live's `cancelled` cue).
+    TurnCancelled,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -170,6 +180,11 @@ pub enum Expectation {
     /// An explicit failure outcome with no fabricated completion, plus a spoken
     /// notice to the person.
     HonestFailure,
+    /// After an injected provider failure the session must stay usable and
+    /// answer this request; a session that ended instead did not recover.
+    RecoverAndAnswer,
+    /// An unfinished utterance; judged only through the step that continues it.
+    Fragment,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -203,6 +218,11 @@ pub enum ProviderFault {
         turn: u64,
         after_first_write_ms: u32,
     },
+    /// The provider connection drops while idle, after the turn completed.
+    DisconnectAfterTurn {
+        turn: u64,
+        after_ms: u32,
+    },
 }
 impl ProviderFault {
     pub fn turn(&self) -> u64 {
@@ -211,13 +231,16 @@ impl ProviderFault {
             | Self::SupplyGap { turn, .. }
             | Self::FailBeforeAudio { turn, .. }
             | Self::DisconnectMidReply { turn, .. }
-            | Self::SpuriousInterrupt { turn, .. } => *turn,
+            | Self::SpuriousInterrupt { turn, .. }
+            | Self::DisconnectAfterTurn { turn, .. } => *turn,
         }
     }
     pub fn ends_run(&self) -> bool {
         matches!(
             self,
-            Self::FailBeforeAudio { .. } | Self::DisconnectMidReply { .. }
+            Self::FailBeforeAudio { .. }
+                | Self::DisconnectMidReply { .. }
+                | Self::DisconnectAfterTurn { .. }
         )
     }
 }
@@ -465,12 +488,14 @@ impl Scenario {
                         ));
                     }
                 }
-                Expectation::HonestFailure => {
+                Expectation::HonestFailure | Expectation::RecoverAndAnswer => {
                     if self.fake_faults.is_empty() || step.scene.is_none() {
-                        return Err(fail("honest_failure needs a stimulus and a provider fault"));
+                        return Err(fail(
+                            "honest_failure/recover_and_answer need a stimulus and a provider fault",
+                        ));
                     }
                 }
-                Expectation::Answer | Expectation::Silence => {
+                Expectation::Answer | Expectation::Silence | Expectation::Fragment => {
                     if step.scene.is_none() {
                         return Err(fail("answer/silence steps need a stimulus"));
                     }
@@ -478,6 +503,16 @@ impl Scenario {
             }
             if let Some(scene_id) = &step.scene {
                 let scene = catalog.scene(scene_id)?;
+                if step
+                    .addressed
+                    .iter()
+                    .any(|id| !scene.clips.iter().any(|clip| &clip.utterance == id))
+                {
+                    return Err(fail(&format!(
+                        "step {} names an addressed utterance absent from {scene_id}",
+                        step.id
+                    )));
+                }
                 // A scene's declared trigger documents its intended use. Keep the
                 // executed plan consistent with it rather than silently diverging.
                 let expected = match scene.trigger {
@@ -495,6 +530,8 @@ impl Scenario {
                         (TriggerKind::LampSpeechStarted, trigger.delay_ms)
                     }
                     TriggerEvent::SpeechRetired => (TriggerKind::LampSpeechEnded, trigger.delay_ms),
+                    // A fresh question after a revocation is declared as a scene start.
+                    TriggerEvent::TurnCancelled => (TriggerKind::SceneStart, 0),
                 };
                 if expected != actual {
                     return Err(fail(&format!(

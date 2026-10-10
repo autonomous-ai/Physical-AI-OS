@@ -7,7 +7,9 @@ use crate::{
     invalid,
     ledger::{Ledger, unix_ms},
     plan::{LoadedPlan, ProviderKind},
-    record::{AttemptRecord, AttemptStatus, Attribution, StepRecord, StepStatus, Stratum},
+    record::{
+        AttemptRecord, AttemptStatus, Attribution, StepRecord, StepStatus, StimulusSource, Stratum,
+    },
     stimulus::StimulusCatalog,
 };
 use lamp_acoustic::hash;
@@ -294,6 +296,8 @@ pub struct ImportOptions<'a> {
     pub room_metadata: Option<&'a Path>,
     /// Whether that recorder is independent of Lamp's own audio hardware.
     pub room_independent: bool,
+    /// How the trial's speech was produced, when known.
+    pub source: StimulusSource,
 }
 
 /// Retain failed evidence as well as verified recordings. An imported final
@@ -511,6 +515,7 @@ pub fn import_trace(
         capability: scenario.capability,
         provider: scenario.provider,
         stratum: Stratum::ImportedTrace,
+        source: options.source,
         repetition: 0,
         order: 0,
         profile: None,

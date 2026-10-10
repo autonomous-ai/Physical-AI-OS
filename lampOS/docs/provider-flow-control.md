@@ -80,7 +80,7 @@ can subsequently be sent fresh; a packet already sitting unread still expires.
 The scripted provider test checks that new input and Stop remain serviceable
 with exhausted output credits. None opens a physical audio device.
 
-Final combined source manifest: `670a905dfb3b01bd5724b98e8a8f38fc4787f46dc81f895ad6d6358ff6b411af`
+Earlier checkpoint source manifest: `670a905dfb3b01bd5724b98e8a8f38fc4787f46dc81f895ad6d6358ff6b411af`
 (160 Rust, Cargo and toolchain files; documentation excluded from this identity).
 On the macOS x86-64 host, the source-only export passed **696 tests, zero failed
 or ignored**, formatting, strict workspace/all-target Clippy, and both release
@@ -102,7 +102,7 @@ synthetic WAV fixtures prove verification behavior, not physical speech quality.
 Validation logs, failed earlier runs, exact commands, and the source manifest
 are retained under `artifacts/provider-flow-20261011/`. The earlier 623-test run
 preceded Agent 2 integration; the subsequent 665-test run preceded the evaluator
-fixes. They are retained separately and are not substituted for the final run.
+fixes. They are retained separately and are not substituted for that checkpoint run.
 
 The first full run exposed an outdated fixture test client that did not return
 credits; it now speaks the new protocol. A subsequent run exposed the
@@ -122,3 +122,8 @@ long-answer delivery qualified until that integrated test passes.
 Linux/ARM64 compilation, cloud behavior, room-audio latency, genuine overlapping
 human speech, and natural desk interaction remain unverified for this source.
 The owner has deferred physical work until Lamp access is restored.
+
+A subsequent integration of Agent 2 through `3eaa0365a` is recorded in
+[voice evaluation integration](voice-eval-integration-20261011.md). Its source
+identity and gates supersede this 696-test checkpoint without changing the
+provider flow-control protocol.

@@ -16,9 +16,9 @@ pub enum Stratum {
     FakeTiming,
     /// Fake runtime with lamp-live's VAD on the exact cached digital mixes.
     FakeSignal,
-    /// Real Lamp, `lamp-live directed-fixture`, iMac loudspeaker stimuli.
+    /// Real Lamp, `lamp-live directed-fixture`; source recorded separately.
     PhysicalFixture,
-    /// Real Lamp, `lamp-live directed` with Gemini, iMac loudspeaker stimuli.
+    /// Real Lamp, `lamp-live directed` with Gemini; source recorded separately.
     PhysicalGemini,
     /// An existing lamp-live trace scored against a declared scenario.
     ImportedTrace,
@@ -36,9 +36,38 @@ impl Stratum {
             Self::FakeSignal => {
                 "fake runtime, digital cached audio through lamp-live VAD (not room audio)"
             }
-            Self::PhysicalFixture => "physical Lamp, cached fixed reply, iMac loudspeaker",
-            Self::PhysicalGemini => "physical Lamp, Gemini, iMac loudspeaker",
+            Self::PhysicalFixture => "physical Lamp, cached fixed reply",
+            Self::PhysicalGemini => "physical Lamp, Gemini",
             Self::ImportedTrace => "imported lamp-live trace, declared attribution",
+        }
+    }
+}
+
+/// Where the person's speech came from. Sources are never pooled: Jieli's
+/// onboard processing may treat loudspeaker replay and a person differently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StimulusSource {
+    /// Fake runtime with declared speech intervals; nothing is audible.
+    DeclaredTiming,
+    /// Fake runtime fed the exact cached digital mix; nothing is audible.
+    DigitalMix,
+    /// Cached synthetic voices played on the iMac loudspeaker.
+    LoudspeakerSynthetic,
+    /// A person speaking prompted lines in the room.
+    DirectHuman,
+    /// Not recorded (for example an imported historical trace).
+    #[default]
+    Unknown,
+}
+impl StimulusSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DeclaredTiming => "declared timing",
+            Self::DigitalMix => "digital cached mix",
+            Self::LoudspeakerSynthetic => "synthetic voices on a loudspeaker",
+            Self::DirectHuman => "direct human speech",
+            Self::Unknown => "stimulus source not recorded",
         }
     }
 }
@@ -95,6 +124,9 @@ pub struct StepRecord {
     pub receipt: Value,
     #[serde(default)]
     pub detail: Option<String>,
+    /// Utterances addressed to Lamp in a multi-talker scene.
+    #[serde(default)]
+    pub addressed: Vec<String>,
 }
 impl StepRecord {
     pub fn planned(step: &crate::plan::Step, status: StepStatus) -> Self {
@@ -110,6 +142,7 @@ impl StepRecord {
             timing: None,
             receipt: Value::Null,
             detail: None,
+            addressed: step.addressed.clone(),
         }
     }
 }
@@ -183,6 +216,8 @@ pub struct AttemptRecord {
     pub capability: Capability,
     pub provider: ProviderKind,
     pub stratum: Stratum,
+    #[serde(default)]
+    pub source: StimulusSource,
     pub repetition: u32,
     pub order: u32,
     pub profile: Option<String>,
