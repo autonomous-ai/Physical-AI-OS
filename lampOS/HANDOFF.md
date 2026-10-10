@@ -10,6 +10,31 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
+- Agent 1 delivered Gemini reliability commit `fbf9ecc3c` on `gemini-voice`,
+  directly above `23bde4873`. This checkpoint integrates it with
+  [provider output credits](docs/provider-flow-control.md), reserving PCM space
+  before sending while preserving capture, control and 100 ms IPC freshness.
+  The coordinator's 30-second cap is a backlog limit; long answers no longer
+  depend on the root accepting unreserved PCM. This is not yet sustained
+  end-to-end qualification: the upstream two-second delivery watchdog still
+  needs Agent 1's playback-paced regression. See the linked protocol and
+  [next 24-hour assignments](docs/development-workstreams.md).
+
+- The final combined source `670a905d` passed **696 host tests, zero failed or
+  ignored**, formatting, strict workspace/all-target Clippy and release builds
+  for `lamp-live` and `lamp-voice-eval`. The full source manifest is
+  `670a905dfb3b01bd5724b98e8a8f38fc4787f46dc81f895ad6d6358ff6b411af`. Exact commands and
+  retained failures are in [provider flow control](docs/provider-flow-control.md)
+  and `artifacts/provider-flow-20261011/`. No new cloud, ARM64 or physical result
+  follows from this host qualification.
+- Evaluator integration now separates [completed playback and content review](docs/voice-eval-answer-review.md)
+  and [verifies room WAV evidence](docs/voice-eval-recording-evidence.md) before
+  acoustic scoring. Known irrelevant/incomplete or duplicate/split answers do
+  not improve completion rates, and missing/changed recordings remain unscored.
+  Unreviewed playback still cannot establish semantic success. Root-owned
+  directed-mode cues, playback-paced upstream delivery, relay framing, and
+  physical admission/echo qualification remain open in the workstream notes.
+
 - [AEC alignment diagnostics](docs/aec-alignment.md) now record Sonora's cached
   internal alignment separately from the supplied queue hint, only with explicit
   audio diagnostics. Replay retains original values and reports its own values
@@ -24,8 +49,12 @@ parallel edits or integrating another agent's changes.
   AEC, candidate admission, choreography and integration. The owner requested
   external Claude sessions for Gemini reliability (`crates/gemini/**` and
   `provider_worker.rs`) and the Rust voice acceptance runner (`crates/voice-eval/**`).
-  Those assignments are not evidence that either external session has started
-  or delivered. Environmental acquisition is deferred behind voice.
+  Agent 1 has delivered the commit noted above. Agent 2 delivered the Rust
+  evaluator through `447fa188b` (six commits preserved), including 34 scenarios,
+  scripted fault injection and complete attempt reports. Integration review
+  found answer-completion accounting and room-recording provenance defects;
+  their fixes and final host verification are part of this checkpoint.
+  Environmental acquisition is deferred behind voice.
 - The [input admission boundary](docs/input-admission.md) separates detected
   candidates from destructive cancellation with bounded original audio, scoped
   evidence and explicit rejection. Directed mode remains immediate VAD-only;

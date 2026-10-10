@@ -125,7 +125,11 @@ Latency rows are labeled `simulated` (fake profile; restates configured delays),
 Percentiles use nearest rank with the exact n. Rates show numerators and
 denominators; answers yielded to a planned interruption and answers the
 provider cannot give (fixture second turns) are listed outside the
-complete-answer denominator.
+complete-answer denominator. Completion credit now also excludes confirmed
+answer-content and duplicate/split failures while retaining those opportunities.
+Reports separate raw completed playback, positively reviewed completions and
+unreviewed completions; see [answer review accounting](voice-eval-answer-review.md).
+An unreviewed completed playback does not establish semantic success.
 
 Annotations (`annotation-template` creates the file) must name the room WAV
 SHA-256, set `listened: true` after a person listened, and give both boundaries
@@ -133,7 +137,12 @@ in WAV seconds. Hints from runner times locate stimuli but are never scored. A
 missing, unlistened, mismatched, one-sided or negative annotation stays
 unscored. Reviewer judgments in a usable annotation count: `answer_complete:
 false` and `answer_relevant: false` fail the step, and `spoken_failure_notice`
-scores physical honest-failure steps.
+scores physical honest-failure steps. The actual WAV is now opened, structurally
+checked and hashed at import/collection and again at scoring. Run identity,
+finite in-recording boundaries and a successful supervised recorder exit are
+required where applicable. Missing or changed files remain visible and unscored.
+See [recording evidence](voice-eval-recording-evidence.md) for bounds, supported
+formats, old-ledger migration and the limits of these checks.
 
 ## Commands
 
@@ -219,6 +228,10 @@ was about ±1.1 ms. These are runner software boundaries on one host; real SSH,
 report and room audio must measure.
 
 ## Current offline results (simulation only)
+
+The findings below retain Agent 2's reported simulation baseline through
+`447fa188b`. They have not been rerun with the subsequent review-accounting and
+recording-provenance fixes and do not qualify this integrated source.
 
 `fake-run --repetitions 3` (seed 1, 102 attempts per profile) against the
 lamp-live directed policy at 64529dee. These describe what the current turn

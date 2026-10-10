@@ -5,7 +5,9 @@ Claude Code sessions alongside Codex. This is an ownership plan, not proof of
 the other sessions' implementation or test status. Use `lamp-v2-chat` as the
 shared integration branch; identify the current checkpoint from its Git history.
 Keep each workstream in a separate checkout and preserve local uncommitted work
-when incorporating a newer shared checkpoint.
+when incorporating a newer shared checkpoint. Continue development on workstream
+branches. Codex integrates reviewed commits into the shared branch; avoid
+concurrent direct pushes that can change the source under another agent's gates.
 
 | Workstream | Primary ownership | Expected deliverable |
 |---|---|---|
@@ -20,7 +22,55 @@ audio. Production/tooling code remains Rust and standalone inside lampOS.
 Environmental acquisition is deferred behind voice completion; Harness, agentic
 tasks and new long-term memory are outside this first release.
 
+## Next 24-hour assignments
+
+Agent 1 continues provider reliability from pushed commit `fbf9ecc3c` on
+`gemini-voice`: playback-paced 60–180-second answers, maximum-size bursts and
+flow-control timeout behavior first; then pause/resume and repeated interruption,
+explicit outage/recovery/turn-failure contracts, narrow service probes when
+access permits, and Linux/ARM64 verification. Codex integrates coordinator
+contract changes. No accepted audio may be silently lost or replayed twice.
+
+Agent 2 delivered the Rust voice acceptance runner through `447fa188b`, with
+34 scenarios, fake-runtime fault injection, an attempt ledger and per-attempt
+reports. Continue by hardening this implementation, not rebuilding it: make
+recording provenance and answer-quality rates strict, then exercise real
+coordinator events after Codex adds the proposed directed-mode cue interface.
+Cover quick/long replies, pauses, topic changes, repeated interruption, background
+and multi-speaker speech, other-device speech, noise, failures/recovery and
+ring/voice consistency. Rank reproducible bugs and retain failed and
+expected-silence trials. Software timestamps are not acoustic measurements.
+Physical direct-human and speaker-replay cohorts stay separate; device work
+waits for restored access. See the runner's [integration proposals](voice-eval.md).
+
+A separate runner-hardening item remains: the relay's `BufRead::lines()` reads
+an entire line before `truncate(MAX_LINE_BYTES)`, and the Mac relay reader also
+uses `lines()`. The stated 64 KiB line limit therefore does not bound allocation;
+byte-index truncation can also land inside a UTF-8 character. Agent 2 should add
+bounded incremental framing with explicit oversized/invalid-line failures and
+regressions before calling the physical relay hardened. This does not affect the
+provider-credit IPC contract and is not silently fixed in the reporting patch.
+
 ## Current contracts relevant to both sessions
+
+- Agent 1 delivered Gemini reliability at `fbf9ecc3c`; see its
+  [integration handoff](gemini-session-reliability.md). Its reported verification
+  is macOS/scripted-service only, not cloud or device qualification.
+- Agent 2 delivered six commits from `186253939` through `447fa188b`. Preserve
+  that history and its scenario/ledger format. The production provider-credit
+  protocol does not change its CLI-level runner interface. Review fixes must
+  keep invalid trials visible and require actual recording evidence before
+  reporting acoustic results. Those two review defects are now fixed; see
+  [answer accounting](voice-eval-answer-review.md) and
+  [recording verification](voice-eval-recording-evidence.md). The combined
+  696-test host gate is documented in [provider flow control](provider-flow-control.md).
+- [Provider output credits](provider-flow-control.md) add the strict control
+  command `ProviderOutputCapacity { through }`. Count every provider packet,
+  preserve counters across startup/turns/recovery, and return credits according
+  to actual coordinator capacity. Provider tests/fixtures must speak this
+  protocol. Do not overwrite the sender or retired-output pruning while
+  integrating new Gemini work. The upstream two-second delivery timeout needs
+  a real playback-paced regression; fast burst draining is insufficient.
 
 - Opt-in audio diagnostics add optional `aec_internal_alignment_ms`; replay
   preserves it and emits separate `replayed_internal_alignment_ms` values.
