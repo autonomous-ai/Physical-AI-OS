@@ -539,6 +539,9 @@ impl lamp_voice_eval::runner::Backend for LateCues<'_> {
     fn stratum(&self, s: &lamp_voice_eval::plan::Scenario) -> Stratum {
         self.0.stratum(s)
     }
+    fn source(&self) -> lamp_voice_eval::record::StimulusSource {
+        self.0.source()
+    }
     fn domain(&self) -> lamp_voice_eval::events::ClockDomain {
         self.0.domain()
     }

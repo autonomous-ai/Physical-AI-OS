@@ -9,11 +9,11 @@ use lamp_voice_eval::{
     ledger::{create_run_directory, read_rows, unix_ms, write_new_json},
     physical::{
         fake_lamp,
-        mac::{LampMode, ObserverPlayer, PhysicalBackend, PhysicalConfig},
+        mac::{HumanPrompter, LampMode, ObserverPlayer, PhysicalBackend, PhysicalConfig, Player},
         session::{self, SessionOptions},
     },
     plan::LoadedPlan,
-    record::AttemptRecord,
+    record::{AttemptRecord, StimulusSource},
     report,
     runner::{SuiteOptions, attempt_order, run_suite},
     stimulus::{AssetIndex, StimulusCatalog},
@@ -32,7 +32,7 @@ const USAGE: &str = "usage:
       [--seed N] [--no-shuffle] [--attempt-seed N] [--cache DIR --manifest FILE...] [--plan FILE]
   lamp-voice-eval evaluate RUN_DIR [--annotations FILE] [--plan FILE]
   lamp-voice-eval import-trace --events FILE --scenario ID --out NEW_DIR [--turn STEP=TURN|none]...
-      [--room-metadata FILE] [--room-independent] [--plan FILE]
+      [--room-metadata FILE] [--room-independent] [--source loudspeaker_synthetic|direct_human] [--plan FILE]
   lamp-voice-eval annotation-template RUN_DIR NEW_FILE
   lamp-voice-eval assets --cache DIR --manifest FILE...
   lamp-voice-eval render-stimuli CACHE NEW_REPORT.json
@@ -318,6 +318,14 @@ fn run() -> Result<i32> {
                 .collect::<Result<Vec<_>>>()?;
             let room = args.take("--room-metadata")?.map(PathBuf::from);
             let room_independent = args.take_flag("--room-independent");
+            let source = match args.take("--source")?.as_deref() {
+                None => StimulusSource::Unknown,
+                Some("loudspeaker_synthetic") => StimulusSource::LoudspeakerSynthetic,
+                Some("direct_human") => StimulusSource::DirectHuman,
+                Some(_) => {
+                    return Err(invalid("--source is loudspeaker_synthetic or direct_human"));
+                }
+            };
             args.done()?;
             create_run_directory(&out)?;
             let run_id = run_id(&out);
@@ -331,6 +339,7 @@ fn run() -> Result<i32> {
                     turn_map,
                     room_metadata: room.as_deref(),
                     room_independent,
+                    source,
                 },
                 &out,
             )?;
@@ -417,12 +426,7 @@ fn run() -> Result<i32> {
             args.done()?;
             let file: PhysicalFile = serde_json::from_slice(&fs::read(&config_path)?)?;
             let config = file.into_config()?;
-            let output_device = config.1;
-            let mut backend = PhysicalBackend::new(
-                config.0,
-                &assets,
-                Box::new(ObserverPlayer { output_device }),
-            );
+            let mut backend = PhysicalBackend::new(config.0, &assets, config.1);
             if !execute {
                 use lamp_voice_eval::runner::Backend;
                 let order = attempt_order(&plan, &options)?;
@@ -495,11 +499,22 @@ struct PhysicalFile {
     room_recorder: Option<Vec<String>>,
     #[serde(default)]
     room_independent: bool,
-    output_device: String,
+    /// Required for loudspeaker replay; unused for direct human speech.
+    #[serde(default)]
+    output_device: Option<String>,
+    /// "loudspeaker_synthetic" (default) or "direct_human".
+    #[serde(default = "default_source")]
+    stimulus_source: StimulusSource,
+    /// Label (not a name) for the person speaking in direct-human runs.
+    #[serde(default)]
+    human_speaker: Option<String>,
     #[serde(default = "default_allowance")]
     allowance_seconds: u16,
     #[serde(default)]
     ring_channel_ceiling: Option<u16>,
+}
+fn default_source() -> StimulusSource {
+    StimulusSource::LoudspeakerSynthetic
 }
 fn default_noise() -> String {
     "on".into()
@@ -508,13 +523,29 @@ fn default_allowance() -> u16 {
     40
 }
 impl PhysicalFile {
-    fn into_config(self) -> Result<(PhysicalConfig, String)> {
+    fn into_config(self) -> Result<(PhysicalConfig, Box<dyn Player>)> {
         if self.lamp_command.is_empty() || !self.lamp_work_root.starts_with('/') {
             return Err(invalid(
                 "lamp_command must be nonempty and lamp_work_root absolute",
             ));
         }
-        lamp_observer::playback::validate_output_name(&self.output_device)?;
+        let player: Box<dyn Player> = match self.stimulus_source {
+            StimulusSource::LoudspeakerSynthetic => {
+                let output_device = self
+                    .output_device
+                    .ok_or_else(|| invalid("loudspeaker replay needs output_device"))?;
+                lamp_observer::playback::validate_output_name(&output_device)?;
+                Box::new(ObserverPlayer { output_device })
+            }
+            StimulusSource::DirectHuman => Box::new(HumanPrompter {
+                speaker_label: self.human_speaker.unwrap_or_else(|| "person-1".into()),
+            }),
+            _ => {
+                return Err(invalid(
+                    "stimulus_source must be loudspeaker_synthetic or direct_human",
+                ));
+            }
+        };
         let mode = match (
             self.fixture_reply,
             self.fixture_sha256,
@@ -539,8 +570,9 @@ impl PhysicalFile {
                 room_independent: self.room_independent,
                 allowance_seconds: self.allowance_seconds,
                 ring_channel_ceiling: self.ring_channel_ceiling,
+                stimulus_source: self.stimulus_source,
             },
-            self.output_device,
+            player,
         ))
     }
 }

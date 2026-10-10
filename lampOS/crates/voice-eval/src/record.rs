@@ -43,6 +43,35 @@ impl Stratum {
     }
 }
 
+/// Where the person's speech came from. Sources are never pooled: Jieli's
+/// onboard processing may treat loudspeaker replay and a person differently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StimulusSource {
+    /// Fake runtime with declared speech intervals; nothing is audible.
+    DeclaredTiming,
+    /// Fake runtime fed the exact cached digital mix; nothing is audible.
+    DigitalMix,
+    /// Cached synthetic voices played on the iMac loudspeaker.
+    LoudspeakerSynthetic,
+    /// A person speaking prompted lines in the room.
+    DirectHuman,
+    /// Not recorded (for example an imported historical trace).
+    #[default]
+    Unknown,
+}
+impl StimulusSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::DeclaredTiming => "declared timing",
+            Self::DigitalMix => "digital cached mix",
+            Self::LoudspeakerSynthetic => "synthetic voices on a loudspeaker",
+            Self::DirectHuman => "direct human speech",
+            Self::Unknown => "stimulus source not recorded",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
@@ -187,6 +216,8 @@ pub struct AttemptRecord {
     pub capability: Capability,
     pub provider: ProviderKind,
     pub stratum: Stratum,
+    #[serde(default)]
+    pub source: StimulusSource,
     pub repetition: u32,
     pub order: u32,
     pub profile: Option<String>,

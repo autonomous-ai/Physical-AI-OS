@@ -8,7 +8,7 @@ use crate::{
     },
     events::EventKind,
     plan::{Expectation, Targets},
-    record::{AttemptRecord, Stratum},
+    record::{AttemptRecord, StimulusSource, Stratum},
     stats::{Distribution, distribution},
 };
 use serde::Serialize;
@@ -247,11 +247,19 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
 }
 
 #[derive(Debug, Serialize)]
+pub struct StratumGroup {
+    pub stratum: Stratum,
+    pub source: StimulusSource,
+    pub summary: StratumSummary,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Report<'a> {
     pub run_id: String,
     pub plan_id: String,
     pub plan_sha256: String,
-    pub strata: BTreeMap<Stratum, StratumSummary>,
+    /// One group per (stratum, stimulus source); groups are never pooled.
+    pub strata: Vec<StratumGroup>,
     pub attempts: &'a [AttemptScore],
     pub limitations: Vec<String>,
     pub incomplete_ledger: Vec<String>,
@@ -267,13 +275,20 @@ pub fn build<'a>(
     incomplete_ledger: Vec<String>,
     self_test: Vec<CanaryResult>,
 ) -> Report<'a> {
-    let mut grouped: BTreeMap<Stratum, Vec<&AttemptScore>> = BTreeMap::new();
+    let mut grouped: BTreeMap<(Stratum, StimulusSource), Vec<&AttemptScore>> = BTreeMap::new();
     for score in scores {
-        grouped.entry(score.stratum).or_default().push(score);
+        grouped
+            .entry((score.stratum, score.source))
+            .or_default()
+            .push(score);
     }
     let strata = grouped
         .into_iter()
-        .map(|(k, v)| (k, summarize(&v)))
+        .map(|((stratum, source), v)| StratumGroup {
+            stratum,
+            source,
+            summary: summarize(&v),
+        })
         .collect();
     Report {
         run_id: run_id.into(),
@@ -295,6 +310,18 @@ fn limitations(scores: &[AttemptScore]) -> Vec<String> {
     ];
     if scores.iter().any(|s| s.voices > 1) {
         notes.push("Several synthetic voices played from one loudspeaker cannot establish spatial speaker discrimination; multi-voice scenarios test restraint under single-source playback only.".into());
+    }
+    if scores
+        .iter()
+        .any(|s| s.source == StimulusSource::LoudspeakerSynthetic)
+    {
+        notes.push("Synthetic voices replayed on a loudspeaker are a separate cohort from direct human speech. The Jieli board's onboard processing may treat them differently, so loudspeaker results do not establish human-speech behavior.".into());
+    }
+    if scores
+        .iter()
+        .any(|s| s.source == StimulusSource::DirectHuman)
+    {
+        notes.push("Direct-human attempts record only when each prompt was shown; reaction time and speech onset come from room audio.".into());
     }
     if !scores.iter().any(|s| s.stratum.is_physical()) {
         notes.push("No physical attempts are in this report, so there is no positive physical overlap/interruption cohort here.".into());
@@ -359,8 +386,9 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
             report.incomplete_ledger.join("; ")
         );
     }
-    for (stratum, s) in &report.strata {
-        let _ = writeln!(out, "\n## {}\n", stratum.label());
+    for group in &report.strata {
+        let (stratum, s) = (&group.stratum, &group.summary);
+        let _ = writeln!(out, "\n## {} ({})\n", stratum.label(), group.source.label());
         let outcomes: Vec<String> = s.outcomes.iter().map(|(k, v)| format!("{k} {v}")).collect();
         let _ = writeln!(out, "{} attempts: {}.\n", s.attempts, outcomes.join(", "));
         if s.invalid_excluded > 0 {
@@ -622,7 +650,7 @@ pub fn attempt_markdown(record: &AttemptRecord, score: &AttemptScore) -> String 
     let _ = writeln!(out, "# Attempt `{}`\n", record.attempt_id);
     let _ = writeln!(
         out,
-        "Scenario `{}` ({:?}, {:?}), provider {:?}, repetition {}, order {}.\n\nStratum: {}.\n\nOutcome: **{}**{}.\n\nReproduce: `{}`\n",
+        "Scenario `{}` ({:?}, {:?}), provider {:?}, repetition {}, order {}.\n\nStratum: {}; stimulus source: {}.\n\nOutcome: **{}**{}.\n\nReproduce: `{}`\n",
         record.scenario,
         record.cohort,
         record.capability,
@@ -630,6 +658,7 @@ pub fn attempt_markdown(record: &AttemptRecord, score: &AttemptScore) -> String 
         record.repetition,
         record.order,
         record.stratum.label(),
+        record.source.label(),
         outcome_label(score.outcome),
         score
             .reason

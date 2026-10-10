@@ -19,7 +19,7 @@ use crate::{
     plan::{
         EchoModel, FakeProfile, FakeReply, FixedReply, ProviderFault, ProviderKind, Scenario, Step,
     },
-    record::{ClockMapping, Stratum},
+    record::{ClockMapping, StimulusSource, Stratum},
     runner::{AttemptContext, Backend, Begin, Finished, Injection},
     stimulus::{AssetIndex, SceneTiming, StimulusCatalog},
 };
@@ -712,6 +712,13 @@ impl Backend for FakeBackend<'_> {
     }
     fn domain(&self) -> ClockDomain {
         ClockDomain::Virtual
+    }
+    fn source(&self) -> StimulusSource {
+        if self.assets.is_some() {
+            StimulusSource::DigitalMix
+        } else {
+            StimulusSource::DeclaredTiming
+        }
     }
     fn profile(&self) -> Option<String> {
         Some(self.profile_id.clone())

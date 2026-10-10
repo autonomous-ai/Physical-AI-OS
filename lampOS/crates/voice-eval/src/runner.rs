@@ -10,8 +10,8 @@ use crate::{
     ledger::{Ledger, unix_ms},
     plan::{LoadedPlan, Scenario, Step, TriggerEvent},
     record::{
-        AttemptRecord, AttemptStatus, Attribution, ClockMapping, StepRecord, StepStatus, Stratum,
-        TriggerObservation,
+        AttemptRecord, AttemptStatus, Attribution, ClockMapping, StepRecord, StepStatus,
+        StimulusSource, Stratum, TriggerObservation,
     },
     stimulus::{SceneTiming, StimulusCatalog},
 };
@@ -61,6 +61,7 @@ pub const MAX_TRIGGER_LATENESS_US: u64 = 100_000;
 pub trait Backend {
     fn describe(&self) -> Value;
     fn stratum(&self, scenario: &Scenario) -> Stratum;
+    fn source(&self) -> StimulusSource;
     fn domain(&self) -> ClockDomain;
     fn profile(&self) -> Option<String> {
         None
@@ -292,6 +293,7 @@ pub fn run_attempt(
         capability: scenario.capability,
         provider: scenario.provider,
         stratum: backend.stratum(scenario),
+        source: backend.source(),
         repetition: context.repetition,
         order: context.order,
         profile: backend.profile(),
@@ -485,6 +487,7 @@ pub fn run_suite(
                 "repetition": repetition,
                 "order": order_index,
                 "stratum": backend.stratum(scenario),
+                "stimulus_source": backend.source(),
                 "expected": scenario.steps.iter().map(|s| json!({
                     "step": s.id, "scene": s.scene, "expect": s.expect,
                     "trigger": s.trigger, "reference": s.reference})).collect::<Vec<_>>(),

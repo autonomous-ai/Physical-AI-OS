@@ -49,6 +49,7 @@ fn config(dir: &common::Private, scenario: &str, mode: LampMode) -> PhysicalConf
         room_independent: false,
         allowance_seconds: 10,
         ring_channel_ceiling: None,
+        stimulus_source: lamp_voice_eval::record::StimulusSource::LoudspeakerSynthetic,
     }
 }
 

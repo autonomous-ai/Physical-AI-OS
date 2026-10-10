@@ -5,7 +5,9 @@ use crate::{
     annotations::{AcousticScore, Annotations},
     events::{EventKind, RuntimeEvent},
     plan::{Capability, Cohort, Expectation, ProviderKind},
-    record::{AttemptRecord, AttemptStatus, Attribution, StepRecord, StepStatus, Stratum},
+    record::{
+        AttemptRecord, AttemptStatus, Attribution, StepRecord, StepStatus, StimulusSource, Stratum,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -218,6 +220,7 @@ pub struct AttemptScore {
     pub cohort: Cohort,
     pub capability: Capability,
     pub stratum: Stratum,
+    pub source: StimulusSource,
     pub repetition: u32,
     pub outcome: Outcome,
     pub reason: Option<String>,
@@ -924,6 +927,7 @@ pub fn score(
         cohort: record.cohort,
         capability: record.capability,
         stratum: record.stratum,
+        source: record.source,
         repetition: record.repetition,
         outcome: Outcome::Withheld,
         reason: None,
