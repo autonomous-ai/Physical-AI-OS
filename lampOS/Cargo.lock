@@ -758,6 +758,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lamp-voice-eval"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "lamp-acoustic",
+ "lamp-audio",
+ "lamp-interaction",
+ "lamp-ipc",
+ "lamp-live",
+ "lamp-observer",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"

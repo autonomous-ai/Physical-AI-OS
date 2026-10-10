@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/acoustic", "crates/interaction", "crates/ipc", "crates/audio", "crates/ring", "crates/gemini", "crates/live", "crates/observer", "crates/motor", "crates/camera", "crates/environment"]
+members = ["crates/acoustic", "crates/interaction", "crates/ipc", "crates/audio", "crates/ring", "crates/gemini", "crates/live", "crates/observer", "crates/motor", "crates/camera", "crates/environment", "crates/voice-eval"]
 resolver = "3"
 
 [workspace.package]

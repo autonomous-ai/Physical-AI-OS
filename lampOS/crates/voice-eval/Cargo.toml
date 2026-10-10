@@ -1,0 +1,21 @@
+[package]
+name = "lamp-voice-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hound.workspace = true
+lamp-acoustic = { path = "../acoustic" }
+lamp-audio = { path = "../audio" }
+lamp-interaction = { path = "../interaction" }
+lamp-ipc = { path = "../ipc" }
+lamp-live = { path = "../live" }
+lamp-observer = { path = "../observer" }
+
+[lints]
+workspace = true
