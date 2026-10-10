@@ -141,4 +141,13 @@ impl TurnDetector {
         self.active = false;
         self.last = None;
     }
+
+    /// A changed DSP history must not relabel an old inactive prefix. Preserve
+    /// sequence validation and an already active utterance across planned AEC resets.
+    pub fn discard_inactive_prefix(&mut self) {
+        if !self.active {
+            self.prefix.clear();
+            self.start_count = 0;
+        }
+    }
 }

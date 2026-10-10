@@ -284,3 +284,17 @@ verified read-only. See [the handoff](../HANDOFF.md),
 were copied to private durable local storage. The owner subsequently authorized
 committing and pushing the source/docs checkpoint on `lamp-v2-chat`; this does
 not include a fleet release or a claim of product acceptance.
+
+## Bounded input admission, host-only checkpoint
+
+The [candidate admission boundary](input-admission.md) is integrated before
+cancellation and provider Start. Pending/rejected candidates retain the old
+answer; accepted candidates preserve their original opening audio and timestamps.
+This still uses immediate directed-session VAD-only acceptance, so it does not
+establish fewer false interruptions or better addressee recognition.
+
+The source-only macOS candidate passed 557 tests, formatting, strict Clippy and
+the release build. A 4,096-sample synthetic candidate/decision probe measured
+p99 0.364 microseconds and first/max 8.523 microseconds, excluding capture, VAD,
+IPC, provider and acoustic output. No physical trial or live latency table was
+changed. Source identity and receipts: `artifacts/input-admission-20261010-8176c475/`.

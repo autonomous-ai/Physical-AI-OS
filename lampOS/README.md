@@ -68,6 +68,7 @@ cargo fmt --all -- --check
 
 See the [directed runtime](docs/live-runtime.md),
 [conversation/ring ownership](docs/ring-choreography.md),
+[input admission](docs/input-admission.md),
 [room observer](docs/room-observer.md), [motor contract](docs/motor-runtime.md),
 [environmental snapshots](docs/environment-snapshots.md), and
 [native component qualification](docs/component-qualification.md) for

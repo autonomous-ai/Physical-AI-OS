@@ -4,7 +4,11 @@
 //! Refuse to present its directed-session results as general desk-conversation
 //! qualification. Every worker failure ends the run and retains a failure trace.
 use crate::{
-    activity::{Activity, ObservedAudio, TurnDetector},
+    activity::{ObservedAudio, TurnDetector},
+    admission::{
+        AcceptanceBasis, CaptureLineage, Context as AdmissionContext, Decision, Evidence,
+        InputAdmission, Rejection, Step as AdmissionStep, Verdict,
+    },
     choreography::RingChoreographer,
     diagnostic_control::{self, DiagnosticFinished, DiagnosticStream},
     fixture_provider::{CueSink, Fixture, FixtureInfo, FixtureOptions},
@@ -846,6 +850,8 @@ fn conversation(
         .map(RingChoreographer::new)
         .transpose()?;
     let mut detector = TurnDetector::default();
+    let mut admission = InputAdmission::default();
+    let mut capture_lineage: Option<CaptureLineage> = None;
     let mut provider_queue = VecDeque::with_capacity(64);
     let mut speaker_pending: Option<PendingSpeaker> = None;
     let mut speaker_sequence = 0u64;
@@ -1105,6 +1111,7 @@ fn conversation(
                         speaker_pending = None;
                         provider_queue.clear();
                         detector = TurnDetector::default();
+                        admission.reset();
                         snapshot = owner.snapshot(now())?;
                         rig.publish(snapshot)?;
                         last_publish = monotonic_us();
@@ -1131,6 +1138,17 @@ fn conversation(
             snapshot = owner.snapshot(now())?;
             rig.publish(snapshot)?;
             return Ok(());
+        }
+        if let Some(capture) = capture_lineage
+            && let Some(rejection) = admission.maintain(
+                AdmissionContext {
+                    capture,
+                    authority: owner.snapshot(now())?,
+                },
+                monotonic_us(),
+            )?
+        {
+            record_input_rejection(trace, rejection)?;
         }
         if permitted && !capture_requested {
             rig.capture.channels.control.send(Control::StartCapture)?;
@@ -1174,6 +1192,20 @@ fn conversation(
                 )?;
                 println!("{}", json!({"status":"listening_ready","seconds":seconds}));
             }
+            let lineage = CaptureLineage {
+                worker: rig.capture.boot,
+                epoch: frame.epoch,
+                dsp_epoch: frame.dsp_epoch,
+                privacy_generation: frame.privacy_generation,
+            };
+            if capture_lineage.is_some_and(|old| old != lineage) {
+                detector.discard_inactive_prefix();
+            }
+            capture_lineage = Some(lineage);
+            let context = AdmissionContext {
+                capture: lineage,
+                authority: owner.snapshot(now())?,
+            };
             let observation = ObservedAudio {
                 sequence: frame.frame_sequence,
                 captured_at_us: frame.read_completed_at_us,
@@ -1182,10 +1214,52 @@ fn conversation(
                     .try_into()
                     .map_err(|_| io::Error::other("invalid capture block"))?,
             };
-            match detector.push(observation, frame.probability) {
-                Activity::Quiet => {}
-                Activity::Fault(reason) => return Err(io::Error::other(reason).into()),
-                Activity::Start(prefix) => {
+            let update = admission.observe(
+                detector.push(observation, frame.probability),
+                context,
+                monotonic_us(),
+            )?;
+            if let Some(rejection) = update.rejection {
+                record_input_rejection(trace, rejection)?;
+            }
+            match update.step {
+                AdmissionStep::None => {}
+                AdmissionStep::Rejected(rejection) => record_input_rejection(trace, rejection)?,
+                AdmissionStep::Candidate(candidate) => {
+                    record(
+                        trace,
+                        json!({"kind":"input_candidate", "candidate":candidate, "at_us":monotonic_us()}),
+                    )?;
+                    // This finite harness still uses explicitly directed VAD-only
+                    // admission. A future classifier must decide this exact candidate
+                    // before this branch may cancel, clear queues, or send Start.
+                    let decision = admission.decide(
+                        Evidence {
+                            candidate: candidate.id,
+                            through_sequence: candidate.trigger_sequence,
+                            produced_at_us: monotonic_us(),
+                            verdict: Verdict::Accept(AcceptanceBasis::DirectedSessionVadOnly),
+                        },
+                        AdmissionContext {
+                            capture: lineage,
+                            authority: owner.snapshot(now())?,
+                        },
+                        monotonic_us(),
+                    )?;
+                    let accepted = match decision {
+                        Decision::Accepted(accepted) => accepted,
+                        Decision::Rejected(rejection) => {
+                            record_input_rejection(trace, rejection)?;
+                            continue;
+                        }
+                        Decision::Ignored => {
+                            return Err(io::Error::other(
+                                "directed candidate decision lost its identity",
+                            )
+                            .into());
+                        }
+                    };
+                    let prefix = accepted.audio;
                     let replacing = reply.is_some();
                     cancel_reply(owner, reply, trace, "user_interrupted")?;
                     let input = if replacing {
@@ -1199,10 +1273,11 @@ fn conversation(
                     let plan = owner.plan_output(now(), turn, OutputKind::Speech, None)?;
                     snapshot = owner.snapshot(now())?;
                     rig.publish(snapshot)?;
-                    last_publish = at;
+                    let admitted_at_us = monotonic_us();
+                    last_publish = admitted_at_us;
                     record(
                         trace,
-                        json!({"kind":"input_admitted","owner":turn,"turn":turn.turn(),"at_us":at,"authority_issued_at_us":snapshot.issued_at().as_micros(),"prefix_first_host_read_us":prefix.first().map(|p|p.captured_at_us)}),
+                        json!({"kind":"input_admitted","owner":turn,"turn":turn.turn(),"at_us":admitted_at_us,"authority_issued_at_us":snapshot.issued_at().as_micros(),"prefix_first_host_read_us":prefix.first().map(|p|p.captured_at_us),"candidate":accepted.candidate.id,"admission_basis":accepted.basis}),
                     )?;
                     provider_queue.push_back(ProviderInput::Start {
                         request: turn.turn(),
@@ -1229,9 +1304,19 @@ fn conversation(
                             audio,
                         )?;
                     }
+                    if accepted.ended {
+                        owner.input_ended(now(), current.owner)?;
+                        provider_queue.push_back(ProviderInput::End {
+                            request: current.owner.turn(),
+                            privacy_generation: snapshot.microphone_generation(),
+                        });
+                        snapshot = owner.snapshot(now())?;
+                        rig.publish(snapshot)?;
+                        last_publish = monotonic_us();
+                    }
                     *reply = Some(current);
                 }
-                Activity::Continue(audio) => {
+                AdmissionStep::Audio(audio) => {
                     if let Some(current) = reply.as_mut() {
                         queue_input(
                             &mut provider_queue,
@@ -1243,7 +1328,7 @@ fn conversation(
                         return Err(io::Error::other("speech continuation lost its owner").into());
                     }
                 }
-                Activity::End(audio) => {
+                AdmissionStep::End(audio) => {
                     let current = reply
                         .as_mut()
                         .ok_or_else(|| io::Error::other("speech end lost its owner"))?;
@@ -1308,6 +1393,7 @@ fn conversation(
             let turn = current.owner.turn();
             owner.complete_turn(now(), current.owner)?;
             snapshot = owner.snapshot(now())?;
+            admission.owner_completed(current.owner, snapshot, monotonic_us())?;
             rig.publish(snapshot)?;
             last_publish = monotonic_us();
             record(
@@ -1519,6 +1605,14 @@ fn validate_capture_frame(
         );
     }
     Ok(())
+}
+
+fn record_input_rejection(trace: &mut Vec<Value>, rejection: Rejection) -> Result<()> {
+    record(
+        trace,
+        json!({"kind":"input_candidate_rejected", "candidate":rejection.candidate,
+        "reason":rejection.reason, "at_us":monotonic_us()}),
+    )
 }
 
 fn cancel_reply(

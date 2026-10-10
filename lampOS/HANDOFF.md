@@ -7,6 +7,26 @@ The broader goal remains unfinished; this document is not release acceptance.
 
 ## Resumed work after export
 
+See [voice workstream ownership](docs/development-workstreams.md) before making
+parallel edits or integrating another agent's changes.
+
+- Immediate owner priority is complete voice interaction. Codex owns microphone/
+  AEC, candidate admission, choreography and integration. The owner requested
+  external Claude sessions for Gemini reliability (`crates/gemini/**` and
+  `provider_worker.rs`) and the Rust voice acceptance runner (`crates/voice-eval/**`).
+  Those assignments are not evidence that either external session has started
+  or delivered. Environmental acquisition is deferred behind voice.
+- The [input admission boundary](docs/input-admission.md) separates detected
+  candidates from destructive cancellation with bounded original audio, scoped
+  evidence and explicit rejection. Directed mode remains immediate VAD-only;
+  this is not an echo classifier or a physically verified interruption fix.
+  The combined source passed 557 host tests, formatting, strict all-target
+  Clippy and release build; Rust source identity `8176c475` (full hash and
+  boundaries in the linked document). Evidence is in
+  `artifacts/input-admission-20261010-8176c475/`; its separate durable backup
+  is `resumed-admission-20261010-8176c475/`. It remains unqualified on ARM64
+  and the real Lamp.
+
 - Latest owner steering: work without the physical device until they check it
   in the office tomorrow. Do not continue discovery, SSH, audio or movement
   experiments while that restriction applies. Local builds/replays continue.
@@ -46,8 +66,10 @@ The broader goal remains unfinished; this document is not release acceptance.
   `artifacts/ring-live-20261010-50cb160b/`. Linux/ARM64 gates are pending because
   the local VM did not remain running. This source is not covered by the earlier
   native checkpoint.
-- These resumed changes are local and uncommitted. No new push or deployment
-  occurred. Earlier environmental/helper work is backed up in the export
+- The owner has now authorized a shared commit/push of the verified resumed
+  work for two other agents. It has not been deployed. Identify the resulting
+  checkpoint with `git log -1 -- lampOS/`; do not confuse host validation with
+  the earlier native checkpoint. Earlier environmental/helper work is backed up in the export
   backup's `resumed-20261010/` directory. The later ring slice, full current
   source and test evidence have their own `resumed-ring-20261010-50cb160b/`
   directory and manifest. Neither replaces the original export or its receipts.

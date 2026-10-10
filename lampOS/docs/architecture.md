@@ -19,6 +19,12 @@ supervised ring worker driven by actual admitted-input and playback transitions.
 It has host verification only. The prototype's static phase cues are not a
 finished character performance or a physical synchronization measurement.
 
+The [input admission boundary](input-admission.md) now separates candidate
+retention from destructive turn replacement. Directed runs still use immediate
+VAD-only acceptance; a production interruption classifier remains unqualified.
+Voice completion, follow-ups and interruption are the immediate development
+priority. Environmental acquisition remains in the release scope but is deferred.
+
 See [benchmark progress](benchmark-progress.md) for the retained trials and current blockers.
 Source home: [top-level lampOS/](../README.md).
 

@@ -4,6 +4,7 @@
 //! The initial harness requires an explicitly opened, finite directed session;
 //! this does not qualify open-desk addressee recognition or background restraint.
 pub mod activity;
+pub mod admission;
 pub mod camera_config;
 pub mod camera_inspect;
 pub mod camera_worker;

@@ -165,8 +165,8 @@ CPU behavior, or end-to-end speech latency.
 local reply. It still uses the directed coordinator, physical privacy worker,
 real admitted microphone input, immutable turn ownership, ordinary speaker
 permits, actual accepted render reference, and normal local cancellation. It
-opens no provider connection and reads no credentials. It starts no camera,
-ring, or motor worker. External actuator owners must remain inhibited; the
+opens no provider connection and reads no credentials. It starts no camera or motor worker. The ring remains unopened unless
+`--ring-channel-ceiling` explicitly enables the supervised ring worker. External actuator owners must remain inhibited; the
 existing exclusive-owner check still refuses active legacy services.
 
 On Linux, after explicit device-test authorization:

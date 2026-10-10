@@ -95,6 +95,30 @@ fn missing_audio_or_invalid_probability_is_failure_not_a_silent_endpoint() {
 }
 
 #[test]
+fn dsp_boundary_discards_inactive_prefix_but_preserves_active_words_and_order() {
+    let mut detector = TurnDetector::default();
+    for seq in 1..=5 {
+        assert!(matches!(detector.push(audio(seq), 0.99), Activity::Quiet));
+    }
+    detector.discard_inactive_prefix();
+    for seq in 6..=10 {
+        assert!(matches!(detector.push(audio(seq), 0.99), Activity::Quiet));
+    }
+    let Activity::Start(prefix) = detector.push(audio(11), 0.99) else {
+        panic!("new DSP prefix should start after six new blocks");
+    };
+    assert_eq!(prefix.first().unwrap().sequence, 6);
+    assert_eq!(prefix.len(), 6);
+    detector.discard_inactive_prefix();
+    assert!(matches!(
+        detector.push(audio(12), 0.99),
+        Activity::Continue(_)
+    ));
+    detector.discard_inactive_prefix();
+    assert!(matches!(detector.push(audio(14), 0.99), Activity::Fault(_)));
+}
+
+#[test]
 fn ipc_replay_or_other_worker_cannot_replace_fresh_observation() {
     let boot = BootId::new([1; 16]).unwrap();
     let mut order = ReceiveOrder::new(boot);

@@ -162,3 +162,14 @@ contracts and diagnostics, with robot-specific profiles and drivers. Lamp is
 the first qualification target. It does not yet establish support for arbitrary
 robots or a tenfold speedup. There is still no accepted matched V1-main/V2
 end-to-end p50/p95 comparison.
+
+## Candidate admission before interruption
+
+The [input admission contract](input-admission.md) borrows V1's distinction
+between local speech suspicion and destructive cancellation. It does not copy
+V1's unqualified energy thresholds, three-second hardware warmup assumption,
+or transcript/provider confirmation. In the current explicit-activity Gemini
+configuration, Start itself requests interruption; its response is circular
+evidence. The bounded local gate preserves original audio and candidate identity
+while leaving pending/rejected output ownership intact. Directed qualification
+still chooses VAD-only acceptance and has no new classifier accuracy result.
