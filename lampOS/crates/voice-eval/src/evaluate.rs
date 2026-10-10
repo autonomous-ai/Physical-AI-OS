@@ -159,7 +159,9 @@ impl Metric {
             Self::StimulusOnsetToAdmission => {
                 "declared/digital stimulus speech onset -> turn admission (same simulated clock)"
             }
-            Self::AdmissionToCancel => "new admission -> old reply revoked",
+            Self::AdmissionToCancel => {
+                "speech candidate (admission if no candidate is traced) -> old reply revoked"
+            }
             Self::CancelToTailRetired => {
                 "old reply revoked -> ALSA retirement of its queued tail (not audible silence)"
             }
@@ -219,6 +221,7 @@ pub struct AttemptScore {
 #[derive(Clone, Debug, Default)]
 struct Turn {
     admitted: Option<u64>,
+    candidate: Option<u64>,
     prefix: Option<u64>,
     endpoint: Option<u64>,
     first_audio: Option<u64>,
@@ -229,6 +232,10 @@ struct Turn {
     tail_retired: Option<u64>,
 }
 impl Turn {
+    /// When replacement was decided: the candidate if traced, else admission.
+    fn decided(&self) -> Option<u64> {
+        self.candidate.or(self.admitted)
+    }
     fn terminal(&self) -> Option<u64> {
         [
             self.retired,
@@ -243,6 +250,15 @@ impl Turn {
 
 fn timeline(events: &[RuntimeEvent]) -> BTreeMap<u64, Turn> {
     let mut turns: BTreeMap<u64, Turn> = BTreeMap::new();
+    let candidates: BTreeMap<String, u64> = events
+        .iter()
+        .filter_map(|e| match (&e.kind, e.at_us) {
+            (EventKind::InputCandidate { candidate }, Some(at)) => {
+                Some((candidate.to_string(), at))
+            }
+            _ => None,
+        })
+        .collect();
     for event in events {
         let (Some(turn), Some(at)) = (event.turn, event.at_us) else {
             continue;
@@ -251,9 +267,18 @@ fn timeline(events: &[RuntimeEvent]) -> BTreeMap<u64, Turn> {
         match &event.kind {
             EventKind::InputAdmitted {
                 prefix_first_read_us,
+                candidate,
+                ..
             } => {
                 entry.admitted.get_or_insert(at);
                 entry.prefix = entry.prefix.or(*prefix_first_read_us);
+                // The decision point is the candidate; admission is published after
+                // the old reply is revoked.
+                if let Some(id) = candidate {
+                    entry.candidate = entry
+                        .candidate
+                        .or_else(|| candidates.get(&id.to_string()).copied());
+                }
             }
             EventKind::LocalEndpoint { .. } => {
                 entry.endpoint.get_or_insert(at);
@@ -460,10 +485,10 @@ fn interrupter(cx: &Context, cancelled: u64, at: u64) -> Option<u64> {
         .iter()
         .filter(|(turn, t)| {
             **turn != cancelled
-                && t.admitted
+                && t.decided()
                     .is_some_and(|a| a.abs_diff(at) <= CAUSE_TOLERANCE_US)
         })
-        .min_by_key(|(_, t)| t.admitted.map(|a| a.abs_diff(at)))
+        .min_by_key(|(_, t)| t.decided().map(|a| a.abs_diff(at)))
         .map(|(turn, _)| *turn)
 }
 
@@ -1079,7 +1104,7 @@ pub fn score(
                         let b = bound
                             .and_then(|b| cx.turns.get(&b).cloned())
                             .unwrap_or_default();
-                        let admitted = cx.turns.get(&first).and_then(|t| t.admitted).unwrap_or(0);
+                        let admitted = cx.turns.get(&first).and_then(Turn::decided).unwrap_or(0);
                         match &b.cancelled {
                             Some((at, _))
                                 if bound.is_some_and(|b| cx.planned_yields.contains(&b)) =>

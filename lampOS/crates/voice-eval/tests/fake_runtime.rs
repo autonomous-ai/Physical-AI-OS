@@ -506,6 +506,8 @@ fn an_admission_during_a_noise_only_scene_fails_that_silence_step() {
         (
             EventKind::InputAdmitted {
                 prefix_first_read_us: Some(started + 1_700_000),
+                candidate: None,
+                basis: None,
             },
             2_000_000,
         ),

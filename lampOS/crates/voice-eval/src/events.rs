@@ -34,8 +34,25 @@ pub enum EventKind {
         provider_kind: Option<String>,
     },
     ListeningReady,
+    /// A speech candidate before any destructive turn replacement.
+    InputCandidate {
+        candidate: Value,
+    },
+    InputCandidateRejected {
+        candidate: Value,
+        reason: Option<String>,
+    },
     InputAdmitted {
         prefix_first_read_us: Option<u64>,
+        /// Candidate ID and admission basis, recorded since lamp-live 9c2c82e1.
+        #[serde(default)]
+        candidate: Option<Value>,
+        #[serde(default)]
+        basis: Option<String>,
+    },
+    /// A requested ring cue (`--ring-channel-ceiling`); SPI/optical output unmeasured.
+    RingRequested {
+        phase: String,
     },
     ProviderInputStarted,
     LocalEndpoint {
@@ -116,7 +133,10 @@ impl RuntimeEvent {
         match &self.kind {
             EventKind::RunStart { .. } => "run_start",
             EventKind::ListeningReady => "listening_ready",
+            EventKind::InputCandidate { .. } => "input_candidate",
+            EventKind::InputCandidateRejected { .. } => "input_candidate_rejected",
             EventKind::InputAdmitted { .. } => "input_admitted",
+            EventKind::RingRequested { .. } => "ring_requested",
             EventKind::ProviderInputStarted => "provider_input_started",
             EventKind::LocalEndpoint { .. } => "local_endpoint",
             EventKind::ProviderFirstAudio => "provider_first_audio",
@@ -152,8 +172,20 @@ pub fn from_trace(record: &Value) -> Option<RuntimeEvent> {
             provider_kind: text("provider_kind"),
         },
         "listening_ready" => EventKind::ListeningReady,
+        "input_candidate" => EventKind::InputCandidate {
+            candidate: record["candidate"]["id"].clone(),
+        },
+        "input_candidate_rejected" => EventKind::InputCandidateRejected {
+            candidate: record["candidate"].clone(),
+            reason: text("reason"),
+        },
         "input_admitted" => EventKind::InputAdmitted {
             prefix_first_read_us: u64_field(record, "prefix_first_host_read_us"),
+            candidate: record.get("candidate").filter(|c| !c.is_null()).cloned(),
+            basis: text("admission_basis"),
+        },
+        "ring_requested" => EventKind::RingRequested {
+            phase: text("phase").unwrap_or_default(),
         },
         "provider_input_started" => EventKind::ProviderInputStarted,
         "local_endpoint" => EventKind::LocalEndpoint {
@@ -224,6 +256,8 @@ pub fn from_trace(record: &Value) -> Option<RuntimeEvent> {
         },
         _ => return None,
     };
+    // Ring requests name their turn only inside the owner.
+    let turn = turn.or_else(|| record["owner"]["turn"].as_u64());
     Some(RuntimeEvent {
         kind: event,
         turn,
@@ -335,10 +369,22 @@ pub fn to_trace(event: &RuntimeEvent, owner: Option<Value>) -> Value {
             json!({"kind":"run_start","provider_kind":provider_kind,"acoustic_score":null})
         }
         EventKind::ListeningReady => json!({"kind":"listening_ready"}),
+        EventKind::InputCandidate { candidate } => {
+            json!({"kind":"input_candidate","candidate":{"id":candidate}})
+        }
+        EventKind::InputCandidateRejected { candidate, reason } => {
+            json!({"kind":"input_candidate_rejected","candidate":candidate,"reason":reason})
+        }
         EventKind::InputAdmitted {
             prefix_first_read_us,
+            candidate,
+            basis,
         } => {
-            json!({"kind":"input_admitted","owner":owner,"prefix_first_host_read_us":prefix_first_read_us})
+            json!({"kind":"input_admitted","owner":owner,"prefix_first_host_read_us":prefix_first_read_us,
+                "candidate":candidate,"admission_basis":basis})
+        }
+        EventKind::RingRequested { phase } => {
+            json!({"kind":"ring_requested","owner":owner,"phase":phase})
         }
         EventKind::ProviderInputStarted => {
             json!({"kind":"provider_input_started","waiting_for_barrier":false})
@@ -399,6 +445,48 @@ mod tests {
 {"kind":"session_boot","at_us":1,"boot":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}
 {"kind":"run_end","at_us":90,"status":"completed_unscored","error":null,"cue_valid":true}"#;
 
+    /// Records from the candidate/ring vocabulary at source 23bde487.
+    const CANDIDATE_RECORDS: &str = r#"{"kind":"input_candidate","candidate":{"id":{"controller":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"serial":4},"trigger_sequence":40,"trigger_read_at_us":95,"first_read_at_us":40,"decision_deadline_us":295,"displaced_owner":null},"at_us":100}
+{"kind":"input_admitted","owner":{"boot":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"turn":2,"generation":3},"turn":2,"at_us":101,"authority_issued_at_us":100,"prefix_first_host_read_us":40,"candidate":{"controller":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"serial":4},"admission_basis":"directed_session_vad_only"}
+{"kind":"input_candidate_rejected","candidate":{"controller":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"serial":5},"reason":"deadline","at_us":120}
+{"kind":"ring_requested","at_us":130,"owner":{"boot":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"turn":2,"generation":3},"phase":"listening","ceiling":24,"permit_expires_at_us":230}"#;
+
+    #[test]
+    fn candidate_and_ring_vocabulary_maps_with_turns_and_ids() {
+        let (events, unmapped) = parse_trace(CANDIDATE_RECORDS).unwrap();
+        assert_eq!(unmapped, 0);
+        let controller = [1_u8; 16];
+        let id = json!({"controller": controller, "serial": 4});
+        assert_eq!(
+            events[0].kind,
+            EventKind::InputCandidate {
+                candidate: id.clone()
+            }
+        );
+        assert_eq!(
+            events[1].kind,
+            EventKind::InputAdmitted {
+                prefix_first_read_us: Some(40),
+                candidate: Some(id),
+                basis: Some("directed_session_vad_only".into())
+            }
+        );
+        assert!(
+            matches!(&events[2].kind, EventKind::InputCandidateRejected { reason: Some(r), .. } if r == "deadline")
+        );
+        assert_eq!(
+            events[3].kind,
+            EventKind::RingRequested {
+                phase: "listening".into()
+            }
+        );
+        assert_eq!(
+            events[3].turn,
+            Some(2),
+            "ring requests take the owner's turn"
+        );
+    }
+
     #[test]
     fn coordinator_vocabulary_maps_without_guessing() {
         let (events, unmapped) = parse_trace(COORDINATOR_RECORDS).unwrap();
@@ -430,7 +518,9 @@ mod tests {
         assert_eq!(
             events[2].kind,
             EventKind::InputAdmitted {
-                prefix_first_read_us: Some(5)
+                prefix_first_read_us: Some(5),
+                candidate: None,
+                basis: None
             }
         );
         assert_eq!(
@@ -451,6 +541,14 @@ mod tests {
         for kind in [
             EventKind::InputAdmitted {
                 prefix_first_read_us: Some(7),
+                candidate: Some(json!({"serial": 1})),
+                basis: Some("directed_session_vad_only".into()),
+            },
+            EventKind::InputCandidate {
+                candidate: json!({"serial": 1}),
+            },
+            EventKind::RingRequested {
+                phase: "speaking".into(),
             },
             EventKind::SpeakerFirstWrite,
             EventKind::SpeechRetired,

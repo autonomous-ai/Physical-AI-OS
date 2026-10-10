@@ -75,6 +75,7 @@ pub struct FakeRuntime {
     vad: Option<SpeechProbability>,
     sources: Vec<Source>,
     turn: u64,
+    candidates: u64,
     answers: usize,
     first_turn: Option<u64>,
     reply: Option<Reply>,
@@ -108,6 +109,7 @@ impl FakeRuntime {
             vad: signal.then(SpeechProbability::default),
             sources: Vec::new(),
             turn: 0,
+            candidates: 0,
             answers: 0,
             first_turn: None,
             reply: None,
@@ -284,7 +286,18 @@ impl FakeRuntime {
         }
     }
 
+    /// Mirrors lamp-live since 9c2c82e1: a candidate is recorded, directed
+    /// mode accepts it at once on VAD alone, the old reply is revoked, and
+    /// only then is the new owner admitted.
     fn admit(&mut self, prefix_start_us: u64) {
+        self.candidates += 1;
+        let candidate = json!({"serial": self.candidates});
+        self.emit(
+            EventKind::InputCandidate {
+                candidate: candidate.clone(),
+            },
+            None,
+        );
         if let Some(reply) = self.reply.take() {
             self.cancel(reply, "user_interrupted");
         }
@@ -293,6 +306,8 @@ impl FakeRuntime {
         self.emit(
             EventKind::InputAdmitted {
                 prefix_first_read_us: Some(prefix_start_us),
+                candidate: Some(candidate),
+                basis: Some("directed_session_vad_only".into()),
             },
             Some(self.turn),
         );
