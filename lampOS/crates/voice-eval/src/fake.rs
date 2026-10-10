@@ -770,10 +770,20 @@ impl Backend for FakeBackend<'_> {
             Some(assets) => Some(Arc::new(assets.pcm(scene)?)),
             None => None,
         };
+        let identity = self.assets.and_then(|assets| assets.get(scene)).map(|asset| {
+            json!({"asset_key": asset.key, "wav_sha256": asset.wav_sha256, "manifest_sha256": asset.manifest_sha256})
+        });
         let started_us = self.runtime()?.inject(timing.clone(), pcm, at_us);
+        let mut receipt = json!({"virtual_start_us": started_us, "late_us": started_us - at_us,
+            "playback": "simulated mix; nothing played"});
+        if let Some(identity) = identity {
+            receipt["asset_key"] = identity["asset_key"].clone();
+            receipt["wav_sha256"] = identity["wav_sha256"].clone();
+            receipt["manifest_sha256"] = identity["manifest_sha256"].clone();
+        }
         Ok(Injection {
             started_us,
-            receipt: json!({"virtual_start_us": started_us, "late_us": started_us - at_us}),
+            receipt,
         })
     }
     fn finish(&mut self, _: &AttemptContext) -> Result<Finished> {

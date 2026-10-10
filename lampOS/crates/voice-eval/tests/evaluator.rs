@@ -176,7 +176,7 @@ fn imported_zejfwxq7_like_chain_counts_every_cancelled_answer() {
     assert_eq!(score.admissions, 4);
     assert!(matches!(
         score.steps[0].answer,
-        Some(evaluate::AnswerOutcome::Incomplete { .. })
+        Some(evaluate::AnswerOutcome::Truncated { .. })
     ));
 }
 

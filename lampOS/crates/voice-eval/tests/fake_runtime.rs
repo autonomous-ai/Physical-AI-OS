@@ -136,10 +136,7 @@ fn acknowledgments_and_asides_falsely_interrupt_the_current_policy() {
         );
         assert_eq!(score.steps[1].status, CheckStatus::Fail, "{scenario}");
         assert!(
-            matches!(
-                score.steps[0].answer,
-                Some(AnswerOutcome::Incomplete { .. })
-            ),
+            matches!(score.steps[0].answer, Some(AnswerOutcome::Truncated { .. })),
             "{scenario}"
         );
     }

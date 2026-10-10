@@ -27,8 +27,10 @@ pub enum FindingKind {
     MissedInput,
     TurnSplit,
     IncompleteAnswer,
+    TruncatedAnswer,
+    MissingAnswer,
+    DuplicateAnswer,
     LateAnswer,
-    NoAnswer,
     LostOpeningWords,
     PossibleLostOpeningWords,
     PlaybackGaps,
@@ -101,10 +103,18 @@ pub enum AnswerOutcome {
     CompleteWithGaps,
     YieldedAsPlanned,
     Late,
-    Incomplete { cause: String },
-    NoAnswer,
+    /// Reply audio started but the answer did not finish.
+    Truncated {
+        cause: String,
+    },
+    /// No reply audio was accepted for an admitted request.
+    Missing {
+        cause: String,
+    },
     NotAdmitted,
-    Unsupported { reason: String },
+    Unsupported {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -769,14 +779,25 @@ fn score_answer(
             .get(&turn)
             .cloned()
             .unwrap_or_else(|| reason.clone().unwrap_or_else(|| "cancelled".into()));
-        cx.finding(
-            FindingKind::IncompleteAnswer,
-            Severity::Failure,
-            Some(&step.step),
-            Some(turn),
-            format!("answer ended before completion: {cause}"),
-        );
-        return (AnswerOutcome::Incomplete { cause }, false);
+        return if t.first_write.is_some() {
+            cx.finding(
+                FindingKind::TruncatedAnswer,
+                Severity::Failure,
+                Some(&step.step),
+                Some(turn),
+                format!("answer started but ended before completion: {cause}"),
+            );
+            (AnswerOutcome::Truncated { cause }, false)
+        } else {
+            cx.finding(
+                FindingKind::MissingAnswer,
+                Severity::Failure,
+                Some(&step.step),
+                Some(turn),
+                format!("answer revoked before any audio: {cause}"),
+            );
+            (AnswerOutcome::Missing { cause }, false)
+        };
     }
     if late {
         cx.finding(FindingKind::LateAnswer, Severity::Failure, Some(&step.step), Some(turn),
@@ -797,34 +818,37 @@ fn score_answer(
             (AnswerOutcome::CompleteWithGaps, true)
         }
         Some(other) => {
+            let cause = format!("turn completed without an answer ({other})");
             cx.finding(
-                FindingKind::NoAnswer,
+                FindingKind::MissingAnswer,
                 Severity::Failure,
                 Some(&step.step),
                 Some(turn),
-                format!("turn completed without an answer ({other})"),
+                cause.clone(),
             );
-            (AnswerOutcome::NoAnswer, false)
+            (AnswerOutcome::Missing { cause }, false)
+        }
+        None if t.first_write.is_some() => {
+            let cause = "no terminal outcome before the session ended".to_owned();
+            cx.finding(
+                FindingKind::TruncatedAnswer,
+                Severity::Failure,
+                Some(&step.step),
+                Some(turn),
+                cause.clone(),
+            );
+            (AnswerOutcome::Truncated { cause }, false)
         }
         None => {
-            let cause = if t.first_write.is_some() {
-                "no terminal outcome before the session ended"
-            } else {
-                "no reply audio before the session ended"
-            };
+            let cause = "no reply audio before the session ended".to_owned();
             cx.finding(
-                FindingKind::IncompleteAnswer,
+                FindingKind::MissingAnswer,
                 Severity::Failure,
                 Some(&step.step),
                 Some(turn),
-                cause.into(),
+                cause.clone(),
             );
-            (
-                AnswerOutcome::Incomplete {
-                    cause: cause.into(),
-                },
-                false,
-            )
+            (AnswerOutcome::Missing { cause }, false)
         }
     }
 }
@@ -1052,6 +1076,25 @@ pub fn score(
             transcript_check(&mut cx, step, first);
         }
         let fail = |status: &mut CheckStatus| *status = CheckStatus::Fail;
+        // One request answered aloud more than once (for example after a split).
+        let answered: Vec<u64> = turns
+            .iter()
+            .copied()
+            .filter(|t| cx.turns.get(t).is_some_and(|t| t.first_write.is_some()))
+            .collect();
+        if request && answered.len() > 1 {
+            cx.finding(
+                FindingKind::DuplicateAnswer,
+                Severity::Failure,
+                Some(&step.step),
+                answered.last().copied(),
+                format!(
+                    "one request was answered aloud {} times (turns {answered:?})",
+                    answered.len()
+                ),
+            );
+            fail(&mut step_score.status);
+        }
         match step.expect {
             Expectation::Answer | Expectation::HonestFailure if turns.is_empty() => {
                 cx.finding(

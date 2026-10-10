@@ -235,7 +235,8 @@ fn run() -> Result<i32> {
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, None))
                 .collect();
-            let directory = write_evaluation(&out, &plan, &options.run_id, &scores, Vec::new())?;
+            let directory =
+                write_evaluation(&out, &plan, &options.run_id, &records, &scores, Vec::new())?;
             print_summary(&scores, &directory);
         }
         "evaluate" => {
@@ -255,7 +256,7 @@ fn run() -> Result<i32> {
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, annotations.as_ref()))
                 .collect();
-            let directory = write_evaluation(&run, &plan, &run_id, &scores, problems)?;
+            let directory = write_evaluation(&run, &plan, &run_id, &records, &scores, problems)?;
             print_summary(&scores, &directory);
         }
         "import-trace" => {
@@ -304,7 +305,8 @@ fn run() -> Result<i32> {
                 &out,
             )?;
             let scores = vec![evaluate::score(&record, plan.plan.answer_deadline_ms, None)];
-            let directory = write_evaluation(&out, &plan, &run_id, &scores, Vec::new())?;
+            let records = vec![record];
+            let directory = write_evaluation(&out, &plan, &run_id, &records, &scores, Vec::new())?;
             print_summary(&scores, &directory);
         }
         "annotation-template" => {
@@ -409,7 +411,8 @@ fn run() -> Result<i32> {
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, None))
                 .collect();
-            let directory = write_evaluation(&out, &plan, &options.run_id, &scores, Vec::new())?;
+            let directory =
+                write_evaluation(&out, &plan, &options.run_id, &records, &scores, Vec::new())?;
             print_summary(&scores, &directory);
         }
         _ => return Err(invalid(USAGE)),
@@ -534,6 +537,7 @@ fn write_evaluation(
     run: &Path,
     plan: &LoadedPlan,
     run_id: &str,
+    records: &[AttemptRecord],
     scores: &[AttemptScore],
     problems: Vec<String>,
 ) -> Result<PathBuf> {
@@ -548,6 +552,17 @@ fn write_evaluation(
         &directory.join("evaluation.json"),
         &serde_json::to_value(&report)?,
     )?;
+    let attempts = directory.join("attempts");
+    create_run_directory(&attempts)?;
+    for (record, score) in records.iter().zip(scores) {
+        let mut file = lamp_voice_eval::ledger::new_private_file(
+            &attempts.join(format!("{}.md", record.attempt_id)),
+        )?;
+        std::io::Write::write_all(
+            &mut file,
+            report::attempt_markdown(record, score).as_bytes(),
+        )?;
+    }
     let markdown = report::markdown(&report, &plan.plan.targets);
     let mut file = lamp_voice_eval::ledger::new_private_file(&directory.join("report.md"))?;
     std::io::Write::write_all(&mut file, markdown.as_bytes())?;
