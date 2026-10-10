@@ -117,14 +117,36 @@ pub enum AnswerOutcome {
     },
 }
 
+/// Content judgments accepted by the recording-review boundary. An absent
+/// judgment is not a positive review, even when software playback completed.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AnswerReview {
+    pub complete: Option<bool>,
+    pub relevant: Option<bool>,
+}
+
+impl AnswerReview {
+    pub(crate) fn rejected(self) -> bool {
+        self.complete == Some(false) || self.relevant == Some(false)
+    }
+
+    pub(crate) fn complete_and_relevant(self) -> bool {
+        self.complete == Some(true) && self.relevant == Some(true)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StepScore {
     pub step: String,
     pub expect: Expectation,
     pub status: CheckStatus,
     pub turns: Vec<u64>,
-    /// Outcome of the answer this step requested, when it requested one.
+    /// Software delivery outcome, independent of content or duplicate replies.
     pub answer: Option<AnswerOutcome>,
+    /// Validated review, kept separate from software delivery. Old saved
+    /// scores lack this field; their explicit negative findings still apply.
+    #[serde(default)]
+    pub answer_review: Option<AnswerReview>,
     /// For interruption steps: whether the playing answer yielded to this
     /// stimulus (`None` when not scorable, e.g. overlap not achieved).
     pub interruption: Option<bool>,
@@ -931,6 +953,7 @@ pub fn score(
                     },
                     turns: Vec::new(),
                     answer: None,
+                    answer_review: None,
                     interruption: None,
                     lost_opening_ms: None,
                 })
@@ -1002,6 +1025,7 @@ pub fn score(
                 },
                 turns: Vec::new(),
                 answer: None,
+                answer_review: None,
                 interruption: None,
                 lost_opening_ms: None,
             })
@@ -1028,6 +1052,7 @@ pub fn score(
             status: CheckStatus::Pass,
             turns: turns.clone(),
             answer: None,
+            answer_review: None,
             interruption: None,
             lost_opening_ms: None,
         };
@@ -1501,6 +1526,10 @@ fn review_findings(cx: &mut Context, steps: &mut [StepScore], annotations: &Anno
         let Some(review) = annotations.reviewed_step(record, &step.step) else {
             continue;
         };
+        step.answer_review = Some(AnswerReview {
+            complete: review.answer_complete,
+            relevant: review.answer_relevant,
+        });
         let mut push = |kind, detail: &str| {
             cx.findings.push(Finding {
                 kind,

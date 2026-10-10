@@ -2,8 +2,8 @@
 //! own; denominators are explicit and withheld/unscored items are listed.
 use crate::{
     evaluate::{
-        AnswerOutcome, AttemptScore, CheckStatus, FindingKind, Metric, MetricKind, Outcome,
-        Severity,
+        AnswerOutcome, AttemptScore, CheckStatus, Evidence, FindingKind, Metric, MetricKind,
+        Outcome, Severity, StepScore,
     },
     events::EventKind,
     plan::{Expectation, Targets},
@@ -47,8 +47,18 @@ pub struct StratumSummary {
     pub outcomes: BTreeMap<String, usize>,
     /// Invalid (aborted) attempts appear in `outcomes` but in no rate or latency.
     pub invalid_excluded: usize,
+    /// Complete software playback with no known answer-content or split/duplicate failure.
+    /// Unreviewed playback can qualify; this is not a semantic-success rate.
     pub complete_answers: Ratio,
     pub complete_answers_without_gaps: Ratio,
+    /// Raw complete software playback, including gaps and rejected answer content.
+    /// Uses the same opportunity denominator as `complete_answers`.
+    pub complete_playbacks: Ratio,
+    pub complete_playbacks_with_answer_failure: usize,
+    /// Subset of `complete_answers.count` with both content judgments positive.
+    pub complete_answers_reviewed: usize,
+    /// Remaining counted completions, including partial or absent content reviews.
+    pub complete_answers_unreviewed: usize,
     pub answers_yielded_as_planned: usize,
     pub answers_unsupported: usize,
     pub false_interruptions: usize,
@@ -81,6 +91,25 @@ pub struct StratumSummary {
     /// Planned yields whose interrupting speech -> audible stop could be measured.
     pub interruption_opportunities: usize,
     pub interruption_measured: usize,
+}
+
+fn answer_has_known_failure(score: &AttemptScore, step: &StepScore) -> bool {
+    step.answer_review.is_some_and(|review| review.rejected())
+        || score.findings.iter().any(|finding| {
+            // Findings are scoped to the requested answer. An unrelated ring
+            // defect or an unconfirmed transcript hypothesis cannot erase it.
+            finding.step.as_deref() == Some(step.step.as_str())
+                && finding.severity == Severity::Failure
+                && match finding.kind {
+                    FindingKind::DuplicateAnswer | FindingKind::TurnSplit => true,
+                    // Also honors negative reviews from older saved scores
+                    // without the new `answer_review` field.
+                    FindingKind::IncompleteAnswer | FindingKind::IrrelevantAnswer => {
+                        finding.evidence == Evidence::RoomAnnotation
+                    }
+                    _ => false,
+                }
+        })
 }
 
 pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
@@ -127,22 +156,33 @@ pub fn summarize(scores: &[&AttemptScore]) -> StratumSummary {
                 s.interruption_opportunities += 1;
             }
             match &step.answer {
-                Some(AnswerOutcome::Complete) => {
-                    s.complete_answers.count += 1;
-                    s.complete_answers.of += 1;
-                    s.complete_answers_without_gaps.count += 1;
-                    s.complete_answers_without_gaps.of += 1;
-                }
-                Some(AnswerOutcome::CompleteWithGaps) => {
-                    s.complete_answers.count += 1;
-                    s.complete_answers.of += 1;
-                    s.complete_answers_without_gaps.of += 1;
-                }
                 Some(AnswerOutcome::YieldedAsPlanned) => s.answers_yielded_as_planned += 1,
                 Some(AnswerOutcome::Unsupported { .. }) => s.answers_unsupported += 1,
-                Some(_) => {
+                Some(answer) => {
                     s.complete_answers.of += 1;
                     s.complete_answers_without_gaps.of += 1;
+                    s.complete_playbacks.of += 1;
+                    if matches!(
+                        answer,
+                        AnswerOutcome::Complete | AnswerOutcome::CompleteWithGaps
+                    ) {
+                        s.complete_playbacks.count += 1;
+                        if answer_has_known_failure(score, step) {
+                            s.complete_playbacks_with_answer_failure += 1;
+                        } else {
+                            s.complete_answers.count += 1;
+                            s.complete_answers_without_gaps.count +=
+                                usize::from(*answer == AnswerOutcome::Complete);
+                            if step
+                                .answer_review
+                                .is_some_and(|review| review.complete_and_relevant())
+                            {
+                                s.complete_answers_reviewed += 1;
+                            } else {
+                                s.complete_answers_unreviewed += 1;
+                            }
+                        }
+                    }
                 }
                 None => {}
             }
@@ -284,6 +324,7 @@ fn limitations(scores: &[AttemptScore]) -> Vec<String> {
         "Strata are never pooled. Fake-runtime rows describe the turn policy against declared or digital stimuli; they contain no room acoustics, loudspeaker, microphone, AEC or physical timing.".to_owned(),
         "Software timestamps (runtime host clock, ALSA acceptance/retirement) are not acoustic boundaries. Acoustic latency appears only from reviewed room-audio annotations; anything else is unscored.".to_owned(),
         "Simulated latencies restate the fake profile's configured provider and speaker delays; they are not predictions.".to_owned(),
+        "Complete-answer rows mean complete software playback with no known answer-content or duplicate/split failure. Unreviewed playback is not evidence of semantic success; partial reviews remain unreviewed. Positive completeness/relevance review does not independently establish factual correctness or naturalness.".to_owned(),
     ];
     if scores.iter().any(|s| s.voices > 1) {
         notes.push("Several synthetic voices played from one loudspeaker cannot establish spatial speaker discrimination; multi-voice scenarios test restraint under single-source playback only.".into());
@@ -346,12 +387,28 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
         let _ = writeln!(out, "| Measure | Result |\n|---|---|");
         let rows = [
             (
-                "Complete answers (within the answer deadline)",
+                "Complete playback, no known answer failure",
                 s.complete_answers.text(),
             ),
             (
-                "Complete answers without playback gaps",
+                "Complete playback, no known answer failure or playback gaps",
                 s.complete_answers_without_gaps.text(),
+            ),
+            (
+                "Complete software playbacks (content and duplicate/split failures included)",
+                s.complete_playbacks.text(),
+            ),
+            (
+                "Complete playbacks excluded for known answer failure",
+                s.complete_playbacks_with_answer_failure.to_string(),
+            ),
+            (
+                "Counted completions with positive completeness and relevance review",
+                s.complete_answers_reviewed.to_string(),
+            ),
+            (
+                "Counted completions without a complete content review",
+                s.complete_answers_unreviewed.to_string(),
             ),
             (
                 "Answers yielded to a planned interruption (not in the denominator)",
@@ -752,16 +809,17 @@ pub fn attempt_markdown(record: &AttemptRecord, score: &AttemptScore) -> String 
     }
     let _ = writeln!(
         out,
-        "\n## Scoring\n\n| Step | Check | Turns | Answer | Lost opening ms | Yielded |\n|---|---|---|---|---|---|"
+        "\n## Scoring\n\nPlayback outcome is software delivery evidence. Content review and duplicate/split findings determine answer-completion credit separately.\n\n| Step | Check | Turns | Playback outcome | Content review | Lost opening ms | Yielded |\n|---|---|---|---|---|---|---|"
     );
     for step in &score.steps {
         let _ = writeln!(
             out,
-            "| {} | {:?} | {:?} | {:?} | {} | {} |",
+            "| {} | {:?} | {:?} | {:?} | {:?} | {} | {} |",
             step.step,
             step.status,
             step.turns,
             step.answer,
+            step.answer_review,
             step.lost_opening_ms
                 .map_or("-".into(), |v| format!("{v:.0}")),
             step.interruption.map_or("-".into(), |v| v.to_string())
