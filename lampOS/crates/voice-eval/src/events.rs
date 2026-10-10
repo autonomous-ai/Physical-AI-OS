@@ -110,6 +110,15 @@ pub struct RuntimeEvent {
     /// Receipt time on the runner, when the event arrived live.
     #[serde(default)]
     pub received_us: Option<u64>,
+    /// Immutable playback occurrence, not a turn or provider generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback_sequence: Option<u64>,
+    /// Invalid trace fields are retained with their attempt, never defaulted into proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_evidence_error: Option<String>,
+    /// Original turn authority generation when the source records it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_generation: Option<u64>,
 }
 
 impl RuntimeEvent {
@@ -127,6 +136,9 @@ impl RuntimeEvent {
             domain,
             source,
             received_us: None,
+            playback_sequence: None,
+            completion_evidence_error: None,
+            owner_generation: None,
         }
     }
     pub fn name(&self) -> &'static str {
@@ -265,6 +277,29 @@ pub fn from_trace(record: &Value) -> Option<RuntimeEvent> {
         domain: ClockDomain::LampMonotonic,
         source: EventSource::Trace,
         received_us: None,
+        // Keep an explicitly malformed identity invalid rather than treating it as legacy omission.
+        playback_sequence: record
+            .get("playback_sequence")
+            .map(|v| v.as_u64().unwrap_or(0)),
+        completion_evidence_error: (kind == "turn_finished"
+            && !record.get("owner").is_some_and(Value::is_object)
+            && (record
+                .get("outcome")
+                .and_then(Value::as_str)
+                .is_none_or(|s| s.is_empty())
+                || record
+                    .get("playback_gaps")
+                    .and_then(Value::as_u64)
+                    .is_none()
+                || record
+                    .get("generation")
+                    .is_some_and(|g| g.as_u64().is_none_or(|n| n == 0))))
+        .then(|| "malformed or missing whole-turn completion fields".into()),
+        owner_generation: record
+            .get("owner")
+            .and_then(|owner| owner.get("generation"))
+            .or_else(|| record.get("generation"))
+            .map(|v| v.as_u64().unwrap_or(0)),
     })
 }
 
@@ -307,6 +342,12 @@ pub struct Cue {
     pub expires_us: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback_gaps: Option<u64>,
 }
 
 pub fn parse_cue(bytes: &[u8]) -> Result<Cue> {
@@ -320,7 +361,8 @@ pub fn parse_cue(bytes: &[u8]) -> Result<Cue> {
         | "local_endpoint"
         | "speaker_first_write"
         | "speech_retired"
-        | "cancelled" => true,
+        | "cancelled"
+        | "turn_completed" => true,
         _ => return Err(invalid("unknown cue kind")),
     };
     if cue.schema != 1
@@ -331,6 +373,18 @@ pub fn parse_cue(bytes: &[u8]) -> Result<Cue> {
         || cue.event_us.checked_add(CUE_FRESH_US) != Some(cue.expires_us)
         || (owned && (cue.turn.is_none_or(|v| v == 0) || cue.generation.is_none_or(|v| v == 0)))
         || (!owned && (cue.turn.is_some() || cue.generation.is_some()))
+        || (cue.kind == "turn_completed"
+            && (cue.playback_gaps.is_none()
+                || !cue.outcome.as_deref().is_some_and(completion_outcome)))
+        || (cue.kind == "turn_completed"
+            && !completion_gaps_match(
+                cue.outcome.as_deref().unwrap_or(""),
+                cue.playback_gaps.unwrap_or(0),
+            ))
+        || (cue.kind != "turn_completed" && (cue.outcome.is_some() || cue.playback_gaps.is_some()))
+        || cue.playback_sequence.is_some_and(|n| {
+            n == 0 || !matches!(cue.kind.as_str(), "speaker_first_write" | "speech_retired")
+        })
         || cue.capture_epoch == Some(0)
         || cue.reference_epoch_context == Some(0)
         || cue
@@ -341,6 +395,21 @@ pub fn parse_cue(bytes: &[u8]) -> Result<Cue> {
         return Err(invalid("unsupported or inconsistent cue identity/times"));
     }
     Ok(cue)
+}
+
+pub(crate) fn completion_gaps_match(outcome: &str, gaps: u64) -> bool {
+    match outcome {
+        "audio_written_unscored" | "no_audio_answer" => gaps == 0,
+        "audio_written_with_playback_gaps_unscored" => gaps > 0,
+        _ => false,
+    }
+}
+
+pub(crate) fn completion_outcome(value: &str) -> bool {
+    matches!(
+        value,
+        "no_audio_answer" | "audio_written_unscored" | "audio_written_with_playback_gaps_unscored"
+    )
 }
 
 impl Cue {
@@ -361,6 +430,10 @@ impl Cue {
                 reason: self.reason.clone(),
                 provider_audio_seen: None,
             },
+            "turn_completed" => EventKind::TurnCompleted {
+                outcome: self.outcome.clone()?,
+                playback_gaps: self.playback_gaps?,
+            },
             "run_end" => EventKind::RunEnd {
                 status: None,
                 error: None,
@@ -374,6 +447,9 @@ impl Cue {
             domain: ClockDomain::LampMonotonic,
             source: EventSource::Cue,
             received_us: None,
+            playback_sequence: self.playback_sequence,
+            completion_evidence_error: None,
+            owner_generation: self.generation,
         })
     }
 }
@@ -423,7 +499,10 @@ pub fn to_trace(event: &RuntimeEvent, owner: Option<Value>) -> Value {
         EventKind::TurnCompleted {
             outcome,
             playback_gaps,
-        } => json!({"kind":"turn_finished","outcome":outcome,"playback_gaps":playback_gaps}),
+        } => {
+            json!({"kind":"turn_finished","generation":owner.as_ref().and_then(|o| o["generation"].as_u64()),
+            "outcome":outcome,"playback_gaps":playback_gaps})
+        }
         EventKind::ProviderInterrupted => json!({"kind":"provider_interrupted"}),
         EventKind::ProviderTurnComplete => json!({"kind":"provider_turn_complete","idle":true}),
         EventKind::CancelledTailRetired => json!({"kind":"cancelled_tail_retired","owner":owner}),
@@ -441,6 +520,9 @@ pub fn to_trace(event: &RuntimeEvent, owner: Option<Value>) -> Value {
             json!({"kind":"run_end","status":status,"error":error})
         }
     };
+    if let Some(sequence) = event.playback_sequence {
+        record["playback_sequence"] = json!(sequence);
+    }
     record["at_us"] = json!(at);
     record["turn"] = event.turn.map_or(Value::Null, |turn| json!(turn));
     record
@@ -589,13 +671,25 @@ mod tests {
                 error: Some("x".into()),
             },
         ] {
-            let event = RuntimeEvent::new(
+            let mut event = RuntimeEvent::new(
                 kind,
                 Some(3),
                 99,
                 ClockDomain::LampMonotonic,
                 EventSource::Trace,
             );
+            // Only events whose wire vocabulary retains authority can round-trip it.
+            if matches!(
+                event.kind,
+                EventKind::InputAdmitted { .. }
+                    | EventKind::RingRequested { .. }
+                    | EventKind::SpeakerFirstWrite
+                    | EventKind::SpeechRetired
+                    | EventKind::TurnCancelled { .. }
+                    | EventKind::TurnCompleted { .. }
+            ) {
+                event.owner_generation = Some(4);
+            }
             let parsed = from_trace(&to_trace(&event, Some(owner.clone()))).unwrap();
             assert_eq!(parsed, event);
         }
@@ -670,6 +764,41 @@ mod tests {
                     "{invalid}"
                 );
             }
+        }
+    }
+    #[test]
+    fn completion_cues_require_all_terminal_fields_and_original_generation() {
+        let good = json!({"schema":1,"sequence":8,"kind":"turn_completed","boot":vec![7;16],
+            "turn":1,"generation":2,"event_us":100,"sent_us":101,"expires_us":100100,
+            "outcome":"audio_written_unscored","playback_gaps":0});
+        let parsed = parse_cue(&serde_json::to_vec(&good).unwrap()).unwrap();
+        assert!(matches!(
+            parsed.event().unwrap().kind,
+            EventKind::TurnCompleted {
+                playback_gaps: 0,
+                ..
+            }
+        ));
+        for field in ["outcome", "playback_gaps", "generation"] {
+            let mut bad = good.clone();
+            bad.as_object_mut().unwrap().remove(field);
+            assert!(
+                parse_cue(&serde_json::to_vec(&bad).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        for (field, value) in [
+            ("outcome", json!("invented")),
+            ("playback_gaps", json!(-1)),
+            ("generation", json!(0)),
+            ("playback_sequence", json!(2)),
+        ] {
+            let mut bad = good.clone();
+            bad[field] = value;
+            assert!(
+                parse_cue(&serde_json::to_vec(&bad).unwrap()).is_err(),
+                "{bad}"
+            );
         }
     }
 }

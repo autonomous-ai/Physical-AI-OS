@@ -494,7 +494,7 @@ fn short_yes_trace() -> String {
             json!({"kind":"local_endpoint","turn":1,"at_us":T0 + 5_000_000}),
             json!({"kind":"speaker_first_write","turn":1,"owner":owner(1),"at_us":T0 + 6_000_000}),
             json!({"kind":"speech_final_sample_retired","turn":1,"owner":owner(1),"at_us":retired}),
-            // The provider was not idle yet, so the next input revokes a fully played reply.
+            // The provider was not idle: one retired occurrence does not prove the full answer complete.
             admit(2, retired + 900_000),
             cancel(2 - 1, retired + 900_010, "user_interrupted"),
             json!({"kind":"local_endpoint","turn":2,"at_us":retired + 1_800_000}),
@@ -506,7 +506,7 @@ fn short_yes_trace() -> String {
 }
 
 #[test]
-fn a_reply_retired_before_its_revocation_is_complete_not_falsely_interrupted() {
+fn legacy_retirement_before_revocation_does_not_prove_whole_answer_complete() {
     let dir = common::Private::new("ret");
     let record = import_with(
         &dir.path,
@@ -517,19 +517,11 @@ fn a_reply_retired_before_its_revocation_is_complete_not_falsely_interrupted() {
     )
     .unwrap();
     let score = evaluate::score(&record, 15_000, None);
-    assert!(
-        !score
-            .findings
-            .iter()
-            .any(|f| f.kind == FindingKind::FalseInterruption),
-        "{:?}",
-        score.findings
-    );
-    assert_eq!(
+    assert!(matches!(
         score.steps[0].answer,
-        Some(evaluate::AnswerOutcome::Complete)
-    );
-    assert_eq!(score.outcome, Outcome::Passed, "{:?}", score.findings);
+        Some(evaluate::AnswerOutcome::Truncated { .. })
+    ));
+    assert_ne!(score.outcome, Outcome::Passed);
 }
 
 #[test]

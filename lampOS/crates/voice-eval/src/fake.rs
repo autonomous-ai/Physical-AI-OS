@@ -17,7 +17,8 @@ use crate::{
     events::{ClockDomain, EventKind, EventSource, RuntimeEvent},
     invalid,
     plan::{
-        EchoModel, FakeProfile, FakeReply, FixedReply, ProviderFault, ProviderKind, Scenario, Step,
+        EchoModel, FakeContinuation, FakeProfile, FakeReply, FixedReply, ProviderFault,
+        ProviderKind, Scenario, Step,
     },
     record::{ClockMapping, StimulusSource, Stratum},
     runner::{AttemptContext, Backend, Begin, Finished, Injection},
@@ -55,6 +56,8 @@ struct Reply {
     gaps: u64,
     generation_done: bool,
     retire_at: Option<u64>,
+    playback_sequence: u64,
+    continuations: VecDeque<FakeContinuation>,
 }
 
 /// One isolated simulated session.
@@ -71,6 +74,7 @@ pub struct FakeRuntime {
     session_end_us: u64,
     ended: bool,
     sequence: u64,
+    playback_sequence: u64,
     detector: TurnDetector,
     vad: Option<SpeechProbability>,
     sources: Vec<Source>,
@@ -107,6 +111,7 @@ impl FakeRuntime {
             ready: false,
             ended: false,
             sequence: 0,
+            playback_sequence: 0,
             detector: TurnDetector::default(),
             vad: signal.then(SpeechProbability::default),
             sources: Vec::new(),
@@ -153,6 +158,18 @@ impl FakeRuntime {
             ClockDomain::Virtual,
             EventSource::Fake,
         ));
+    }
+
+    fn emit_playback(&mut self, kind: EventKind, turn: u64, sequence: u64) {
+        let mut event = RuntimeEvent::new(
+            kind,
+            Some(turn),
+            self.now_us,
+            ClockDomain::Virtual,
+            EventSource::Fake,
+        );
+        event.playback_sequence = Some(sequence);
+        self.out.push_back(event);
     }
 
     /// A ring cue request, as the choreography policy derives it from the
@@ -350,6 +367,8 @@ impl FakeRuntime {
             gaps: 0,
             generation_done: false,
             retire_at: None,
+            playback_sequence: 0,
+            continuations: VecDeque::new(),
         });
     }
 
@@ -421,10 +440,12 @@ impl FakeRuntime {
                     .unwrap_or(FakeReply {
                         text: "Okay.".into(),
                         speech_ms: 800,
+                        continuations: Vec::new(),
                     });
                 self.answers += 1;
                 reply.total_us = u64::from(script.speech_ms) * 1000;
                 reply.text = script.text;
+                reply.continuations = script.continuations.into();
                 let jitter = self
                     .rng
                     .below_inclusive(u64::from(self.profile.first_audio_jitter_ms));
@@ -556,7 +577,11 @@ impl FakeRuntime {
                 text: reply.text.clone(),
                 finished: true,
             });
-            events.push(EventKind::ProviderTurnComplete);
+            // A segment finished generating, but the synthetic provider is not
+            // idle while another generation of this same turn is scheduled.
+            if reply.continuations.is_empty() {
+                events.push(EventKind::ProviderTurnComplete);
+            }
         }
         for kind in events {
             self.emit(kind, Some(turn));
@@ -577,6 +602,8 @@ impl FakeRuntime {
             && reply.first_audio_seen
             && reply.first_audio_at.is_some_and(|at| now >= at + dispatch)
         {
+            self.playback_sequence += 1;
+            reply.playback_sequence = self.playback_sequence;
             reply.first_write_us = Some(now);
             events.push(EventKind::SpeakerFirstWrite);
             if let EchoModel::Leak {
@@ -624,9 +651,14 @@ impl FakeRuntime {
         });
         let retired = reply.retire_at.is_some_and(|at| now >= at);
         let gaps = reply.gaps;
+        let playback_sequence = reply.playback_sequence;
         let started = events.contains(&EventKind::SpeakerFirstWrite);
         for kind in events {
-            self.emit(kind, Some(turn));
+            if kind == EventKind::SpeakerFirstWrite {
+                self.emit_playback(kind, turn, playback_sequence);
+            } else {
+                self.emit(kind, Some(turn));
+            }
         }
         if started {
             self.ring("speaking", turn);
@@ -638,7 +670,30 @@ impl FakeRuntime {
             // The coordinator restarts turn detection after a provider interruption.
             self.detector = TurnDetector::default();
         } else if retired {
-            self.emit(EventKind::SpeechRetired, Some(turn));
+            self.emit_playback(EventKind::SpeechRetired, turn, playback_sequence);
+            if let Some(next) = self
+                .reply
+                .as_mut()
+                .and_then(|r| r.continuations.pop_front())
+            {
+                let reply = self
+                    .reply
+                    .as_mut()
+                    .expect("reply retained between generations");
+                reply.total_us = u64::from(next.speech_ms) * 1000;
+                reply.text = next.text;
+                reply.first_audio_at = Some(now + u64::from(next.delay_ms) * 1000);
+                reply.first_audio_seen = false;
+                reply.generated_us = 0;
+                reply.played_us = 0;
+                reply.first_write_us = None;
+                reply.generation_done = false;
+                reply.retire_at = None;
+                reply.gap_until = None;
+                reply.in_gap = false;
+                self.ring("waiting", turn);
+                return;
+            }
             let outcome = if gaps > 0 {
                 "audio_written_with_playback_gaps_unscored"
             } else {

@@ -8,8 +8,8 @@ use lamp_acoustic::{Trigger as SceneTrigger, hash};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PLAN_VERSION: u32 = 1;
-pub const DEFAULT_PLAN: &str = include_str!("../../../fixtures/voice-eval-v1.json");
+pub const PLAN_VERSION: u32 = 2;
+pub const DEFAULT_PLAN: &str = include_str!("../../../fixtures/voice-eval-v2.json");
 /// Startup before readiness is outside the session; this bounds the wait for it.
 pub const MAX_DEADLINE_MS: u32 = 60_000;
 pub const MAX_SESSION_SECONDS: u16 = 600;
@@ -145,8 +145,10 @@ pub enum TriggerEvent {
     ListeningReady,
     /// First ALSA-accepted reply write of the turn answering the previous step.
     SpeakerFirstWrite,
-    /// ALSA retirement of that reply's final speech sample.
+    /// ALSA retirement of one playback occurrence (historical v1 boundary).
     SpeechRetired,
+    /// Whole reply completed after all provider generations and playback occurrences.
+    TurnCompleted,
     /// A reply revoked for any reason (lamp-live's `cancelled` cue).
     TurnCancelled,
 }
@@ -190,6 +192,17 @@ pub enum Expectation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FakeReply {
+    pub text: String,
+    pub speech_ms: u32,
+    /// Synthetic later playback generations of the same turn; never physical audio.
+    #[serde(default)]
+    pub continuations: Vec<FakeContinuation>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FakeContinuation {
+    pub delay_ms: u32,
     pub text: String,
     pub speech_ms: u32,
 }
@@ -341,7 +354,7 @@ impl LoadedPlan {
 
 impl Plan {
     pub fn validate(&self, catalog: &StimulusCatalog) -> Result<()> {
-        if self.version != PLAN_VERSION || !valid_id(&self.id) {
+        if !(1..=PLAN_VERSION).contains(&self.version) || !valid_id(&self.id) {
             return Err(invalid("unsupported plan version or invalid plan id"));
         }
         if !(1_000..=60_000).contains(&self.answer_deadline_ms) {
@@ -431,10 +444,16 @@ impl Scenario {
             ));
         }
         if self.fake_replies.len() > 16
-            || self
-                .fake_replies
-                .iter()
-                .any(|r| r.text.is_empty() || !(200..=60_000).contains(&r.speech_ms))
+            || self.fake_replies.iter().any(|r| {
+                r.text.is_empty()
+                    || !(200..=60_000).contains(&r.speech_ms)
+                    || r.continuations.len() > 4
+                    || r.continuations.iter().any(|c| {
+                        c.text.is_empty()
+                            || !(200..=60_000).contains(&c.speech_ms)
+                            || c.delay_ms > 60_000
+                    })
+            })
         {
             return Err(fail("invalid fake replies"));
         }
@@ -529,7 +548,9 @@ impl Scenario {
                     TriggerEvent::SpeakerFirstWrite => {
                         (TriggerKind::LampSpeechStarted, trigger.delay_ms)
                     }
-                    TriggerEvent::SpeechRetired => (TriggerKind::LampSpeechEnded, trigger.delay_ms),
+                    TriggerEvent::SpeechRetired | TriggerEvent::TurnCompleted => {
+                        (TriggerKind::LampSpeechEnded, trigger.delay_ms)
+                    }
                     // A fresh question after a revocation is declared as a scene start.
                     TriggerEvent::TurnCancelled => (TriggerKind::SceneStart, 0),
                 };

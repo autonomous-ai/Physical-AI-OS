@@ -75,6 +75,15 @@ provider-credit IPC contract and is not silently fixed in the reporting patch.
   integrating new Gemini work. The upstream two-second delivery timeout needs
   a real playback-paced regression; fast burst draining is insufficient.
 
+- A Gemini request can have [multiple playback occurrences](playback-occurrences.md).
+  Do not equate generation completion or one segment's retirement with final
+  turn completion. The coordinator serializes the speaker's final cursor and
+  emits `playback_sequence` on both start/retirement observations. Normal
+  `turn_finished` adds top-level `generation`; `owner` remains cancellation.
+  Current runner follow-ups use the new `turn_completed` cue and retain exact
+  outcome/gap metadata. Update producer and consumer together; preserve older
+  plan hashes and original `SpeechRetired` semantics.
+
 - Opt-in audio diagnostics add optional `aec_internal_alignment_ms`; replay
   preserves it and emits separate `replayed_internal_alignment_ms` values.
   This is cached AEC buffer state, not confidence or an admission signal. The

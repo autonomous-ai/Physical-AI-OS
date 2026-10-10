@@ -5,6 +5,7 @@ use crate::{
     annotations::{AcousticScore, Annotations},
     events::{EventKind, RuntimeEvent},
     plan::{Capability, Cohort, Expectation, ProviderKind},
+    playback::PlaybackHistory,
     record::{
         AttemptRecord, AttemptStatus, Attribution, StepRecord, StepStatus, StimulusSource, Stratum,
     },
@@ -264,12 +265,13 @@ pub struct AttemptScore {
 #[derive(Clone, Debug, Default)]
 struct Turn {
     admitted: Option<u64>,
+    generation: Option<u64>,
     candidate: Option<u64>,
     prefix: Option<u64>,
     endpoint: Option<u64>,
     first_audio: Option<u64>,
     first_write: Option<u64>,
-    retired: Option<u64>,
+    playback: PlaybackHistory,
     completed: Option<(u64, String)>,
     cancelled: Option<(u64, Option<String>)>,
     tail_retired: Option<u64>,
@@ -279,15 +281,43 @@ impl Turn {
     fn decided(&self) -> Option<u64> {
         self.candidate.or(self.admitted)
     }
+    fn cutoff(&self, run_end: u64) -> u64 {
+        self.terminal().unwrap_or(run_end)
+    }
+    fn playing_at(&self, at: u64, run_end: u64, tolerance: u64) -> bool {
+        self.playback
+            .playing_at(at, self.cutoff(run_end), tolerance)
+    }
     fn terminal(&self) -> Option<u64> {
         [
-            self.retired,
             self.completed.as_ref().map(|c| c.0),
             self.cancelled.as_ref().map(|c| c.0),
         ]
         .into_iter()
         .flatten()
         .min()
+    }
+}
+
+/// Recognized lifecycle records cannot disappear just because their identity or
+/// timestamp is absent. Other timestamp-free records (for example fault detail)
+/// retain their original meaning.
+fn lifecycle_evidence_error(event: &RuntimeEvent) -> Option<&'static str> {
+    if !matches!(
+        event.kind,
+        EventKind::SpeakerFirstWrite
+            | EventKind::SpeechRetired
+            | EventKind::TurnCompleted { .. }
+            | EventKind::TurnCancelled { .. }
+    ) {
+        return None;
+    }
+    if event.turn.is_none_or(|turn| turn == 0) {
+        Some("playback/terminal event has no valid turn identity")
+    } else if event.at_us.is_none() {
+        Some("playback/terminal event has no original timestamp")
+    } else {
+        None
     }
 }
 
@@ -303,10 +333,24 @@ fn timeline(events: &[RuntimeEvent]) -> BTreeMap<u64, Turn> {
         })
         .collect();
     for event in events {
+        if let Some(reason) = lifecycle_evidence_error(event) {
+            if let Some(turn) = event.turn.filter(|turn| *turn > 0) {
+                turns.entry(turn).or_default().playback.invalidate(reason);
+            }
+            continue;
+        }
         let (Some(turn), Some(at)) = (event.turn, event.at_us) else {
             continue;
         };
         let entry = turns.entry(turn).or_default();
+        if let Some(generation) = event.owner_generation {
+            if generation == 0 || entry.generation.is_some_and(|old| old != generation) {
+                entry
+                    .playback
+                    .invalidate("turn authority generation changed or is invalid");
+            }
+            entry.generation.get_or_insert(generation);
+        }
         match &event.kind {
             EventKind::InputAdmitted {
                 prefix_first_read_us,
@@ -330,15 +374,59 @@ fn timeline(events: &[RuntimeEvent]) -> BTreeMap<u64, Turn> {
                 entry.first_audio.get_or_insert(at);
             }
             EventKind::SpeakerFirstWrite => {
+                if entry.terminal().is_some() {
+                    entry
+                        .playback
+                        .invalidate("playback after whole-turn termination");
+                }
+                let _ = entry.playback.start(event.playback_sequence, at);
                 entry.first_write.get_or_insert(at);
             }
             EventKind::SpeechRetired => {
-                entry.retired.get_or_insert(at);
+                let _ = entry.playback.retire(event.playback_sequence, at);
             }
-            EventKind::TurnCompleted { outcome, .. } => {
+            EventKind::TurnCompleted {
+                outcome,
+                playback_gaps,
+            } => {
+                if !crate::events::completion_gaps_match(outcome, *playback_gaps) {
+                    entry
+                        .playback
+                        .invalidate("whole-turn outcome and gap count are inconsistent");
+                }
+                if let Some(reason) = &event.completion_evidence_error {
+                    entry.playback.invalidate(reason);
+                }
+                if entry.terminal().is_some() {
+                    entry
+                        .playback
+                        .invalidate("duplicate or conflicting whole-turn termination");
+                }
+                let audio = outcome.starts_with("audio_written");
+                if (audio && !entry.playback.complete()) || (!audio && entry.playback.started()) {
+                    entry
+                        .playback
+                        .invalidate("completion lacks a complete matching playback history");
+                }
+                if entry
+                    .playback
+                    .occurrences
+                    .last()
+                    .and_then(|p| p.retired_us)
+                    .is_some_and(|end| end > at)
+                {
+                    entry
+                        .playback
+                        .invalidate("whole-turn completion predates playback retirement");
+                }
                 entry.completed.get_or_insert((at, outcome.clone()));
             }
             EventKind::TurnCancelled { reason, .. } => {
+                if entry.terminal().is_some() {
+                    entry
+                        .playback
+                        .invalidate("duplicate or conflicting whole-turn termination");
+                }
                 entry.cancelled.get_or_insert((at, reason.clone()));
             }
             EventKind::CancelledTailRetired => {
@@ -379,8 +467,6 @@ struct Context<'a> {
     false_interrupted: BTreeMap<u64, String>,
     /// Admissions that caused a false interruption (counted once there).
     interrupters: BTreeSet<u64>,
-    /// Replies whose final sample retired before a later cancellation.
-    fully_played: BTreeSet<u64>,
     /// Declared-attribution stimulus steps with no declared turn.
     undeclared: BTreeSet<usize>,
     /// Admissions of background (unaddressed) talk inside multi-talker scenes.
@@ -560,17 +646,6 @@ fn analyse_cancellations(cx: &mut Context) {
         .collect();
     let record = cx.record;
     for (turn, at, reason, audible) in cancelled {
-        // The runtime finishes a turn only when the provider is idle too, so a
-        // reply can retire completely and still be revoked by the next input.
-        if cx
-            .turns
-            .get(&turn)
-            .and_then(|t| t.retired)
-            .is_some_and(|r| r <= at)
-        {
-            cx.fully_played.insert(turn);
-            continue;
-        }
         let state = if audible {
             "playing"
         } else {
@@ -783,6 +858,14 @@ fn score_answer(
             true,
         );
     }
+    if let Some(reason) = t.playback.error() {
+        return (
+            AnswerOutcome::Unsupported {
+                reason: format!("invalid playback evidence: {reason}"),
+            },
+            true,
+        );
+    }
     let kind = cx.kind();
     if let (Some(endpoint), Some(write)) = (t.endpoint, t.first_write) {
         cx.latency(
@@ -821,9 +904,6 @@ fn score_answer(
         _ => false,
     };
     if let Some((_, reason)) = &t.cancelled {
-        if cx.fully_played.contains(&turn) {
-            return (AnswerOutcome::Complete, true);
-        }
         if cx.planned_yields.contains(&turn) {
             return (AnswerOutcome::YieldedAsPlanned, true);
         }
@@ -1015,7 +1095,6 @@ pub fn score(
         planned_yields: BTreeSet::new(),
         false_interrupted: BTreeMap::new(),
         interrupters: BTreeSet::new(),
-        fully_played: BTreeSet::new(),
         undeclared: BTreeSet::new(),
         background: BTreeSet::new(),
     };
@@ -1033,12 +1112,48 @@ pub fn score(
         attribute(&mut cx)
     };
     score.admissions = cx.turns.values().filter(|t| t.admitted.is_some()).count();
+    let run_end = record
+        .events
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::RunEnd { .. }))
+        .filter_map(|e| e.at_us)
+        .max()
+        .unwrap_or(0);
     score.playback_ms = cx
         .turns
         .values()
-        .filter_map(|t| Some(ms(i128::from(t.terminal()?) - i128::from(t.first_write?))))
-        .filter(|v| *v > 0.0)
+        .flat_map(|t| t.playback.intervals(t.cutoff(run_end)))
+        .map(|(start, end)| ms(i128::from(end) - i128::from(start)))
         .sum();
+    let invalid_history: Vec<_> = cx
+        .turns
+        .iter()
+        .filter_map(|(turn, t)| t.playback.error().map(|reason| (*turn, reason.to_owned())))
+        .collect();
+    for (turn, reason) in invalid_history {
+        score.outcome = Outcome::Invalid;
+        cx.finding(
+            FindingKind::EvidenceMissing,
+            Severity::Withheld,
+            None,
+            Some(turn),
+            format!("invalid playback occurrence evidence: {reason}"),
+        );
+    }
+    for event in &record.events {
+        if event.turn.is_none_or(|turn| turn == 0)
+            && let Some(reason) = lifecycle_evidence_error(event)
+        {
+            score.outcome = Outcome::Invalid;
+            cx.finding(
+                FindingKind::EvidenceMissing,
+                Severity::Withheld,
+                None,
+                None,
+                format!("{}: {reason}; ownership is not inferred", event.name()),
+            );
+        }
+    }
     if let Some(reason) = unscorable {
         cx.finding(
             FindingKind::EvidenceMissing,
@@ -1138,18 +1253,13 @@ pub fn score(
             .iter()
             .find(|w| w.step == index)
             .and_then(|w| w.clips.iter().map(|c| c.0).min());
-        let bound_end = step
-            .bound_turn
-            .and_then(|b| cx.turns.get(&b))
-            .and_then(Turn::terminal);
-        // Overlap steps test speech during playback; if playback had ended
-        // before the stimulus reached the runtime, the condition was not met.
+        // Overlap is occurrence-specific: silence between generations is not playback.
         let overlap_missed = matches!(
             step.expect,
             Expectation::NoInterrupt | Expectation::InterruptAndAnswer
         ) && onset
-            .zip(bound_end)
-            .is_some_and(|(onset, end)| end <= onset);
+            .zip(step.bound_turn.and_then(|b| cx.turns.get(&b)))
+            .is_some_and(|(onset, t)| !t.playing_at(onset, run_end, 0));
         let request = matches!(
             step.expect,
             Expectation::Answer
@@ -1295,7 +1405,7 @@ pub fn score(
                                     );
                                 }
                             }
-                            _ if b.terminal().is_some_and(|end| end < admitted) => {
+                            _ if !b.playing_at(admitted, run_end, STATE_TOLERANCE_US) => {
                                 cx.finding(FindingKind::OverlapNotAchieved, Severity::Withheld, Some(&step.step), bound,
                                     "the answer had already ended when the interruption was admitted".into());
                                 step_score.status = CheckStatus::Unscored {
@@ -1726,18 +1836,19 @@ fn consistency(cx: &mut Context) -> bool {
             ));
             continue;
         }
-        let playing_from = t.first_write;
-        let playing_to = t.retired.or(revoked).or(ended);
+        let cutoff = t.cutoff(u64::MAX);
         let within = |from: Option<u64>, to: Option<u64>| {
-            from.is_some_and(|f| at + tol >= f) && to.is_none_or(|e| at <= e + tol)
+            from.is_some_and(|f| at.saturating_add(tol) >= f)
+                && to.is_none_or(|e| at <= e.saturating_add(tol))
         };
         let consistent = match phase.as_str() {
             "listening" => within(t.decided().or(t.admitted), t.endpoint.or(ended)),
-            "speaking" => within(playing_from, playing_to),
+            "speaking" => t.playing_at(at, cutoff, tol),
             "waiting" => {
-                t.endpoint.is_some_and(|e| at + tol >= e)
-                    && !(playing_from.is_some_and(|f| at > f + tol)
-                        && playing_to.is_none_or(|e| at + tol < e))
+                t.endpoint.is_some_and(|e| at.saturating_add(tol) >= e)
+                    && !t.playback.intervals(cutoff).any(|(start, end)| {
+                        at > start.saturating_add(tol) && at.saturating_add(tol) < end
+                    })
             }
             _ => false,
         };
@@ -1754,13 +1865,10 @@ fn consistency(cx: &mut Context) -> bool {
     let mut intervals: Vec<(u64, u64, u64)> = cx
         .turns
         .iter()
-        .filter_map(|(turn, t)| {
-            let start = t.first_write?;
-            let end = t
-                .retired
-                .or(t.cancelled.as_ref().map(|c| c.0))
-                .unwrap_or(u64::MAX);
-            Some((start, end, *turn))
+        .flat_map(|(turn, t)| {
+            t.playback
+                .intervals(t.cutoff(u64::MAX))
+                .map(move |(start, end)| (start, end, *turn))
         })
         .collect();
     intervals.sort();
@@ -1831,5 +1939,34 @@ fn classify_background(cx: &mut Context) {
             Some(turn),
             "background attribution is unknown: input has no endpoint or terminal event".into(),
         );
+    }
+}
+
+#[cfg(test)]
+mod completion_evidence_tests {
+    use super::*;
+    use crate::events::{ClockDomain, EventSource};
+    #[test]
+    fn synthetic_events_cannot_bypass_outcome_gap_consistency() {
+        for (outcome, gaps) in [
+            ("audio_written_unscored", 1),
+            ("audio_written_with_playback_gaps_unscored", 0),
+            ("no_audio_answer", 1),
+        ] {
+            let event = RuntimeEvent::new(
+                EventKind::TurnCompleted {
+                    outcome: outcome.into(),
+                    playback_gaps: gaps,
+                },
+                Some(1),
+                100,
+                ClockDomain::Virtual,
+                EventSource::Fake,
+            );
+            assert_eq!(
+                timeline(&[event])[&1].playback.error(),
+                Some("whole-turn outcome and gap count are inconsistent")
+            );
+        }
     }
 }

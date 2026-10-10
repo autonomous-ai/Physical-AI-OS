@@ -491,7 +491,7 @@ fn cues_are_bounded_ordered_fresh_and_keep_owner_epoch_context() {
         json!({"kind":"capture_started","details":{"epoch":3}}),
         json!({"kind":"reference_clock","details":{"playback_epoch":8}}),
         json!({"kind":"listening_ready","at_us":AT}),
-        json!({"kind":"speaker_first_write","at_us":AT+1,"turn":9,"owner":{"generation":11}}),
+        json!({"kind":"speaker_first_write","at_us":AT+1,"turn":9,"owner":{"generation":11},"playback_sequence":17}),
     ];
     assert_eq!(sink.scan(&trace, AT + 2), None);
     let mut bytes = [0; CUE_MAX_BYTES];
@@ -508,6 +508,7 @@ fn cues_are_bounded_ordered_fresh_and_keep_owner_epoch_context() {
         if sequence == 2 {
             assert_eq!(event["turn"], 9);
             assert_eq!(event["generation"], 11);
+            assert_eq!(event["playback_sequence"], 17);
         }
     }
     assert_eq!(sink.scan(&trace, AT + 3), None);
@@ -527,7 +528,7 @@ fn conversation_cues_preserve_turns_endpoints_and_cancellation_reasons() {
         json!({"kind":"turn_finished","at_us":AT+2,"turn":9,"owner":{"generation":11},"outcome":"user_interrupted"}),
         json!({"kind":"input_admitted","at_us":AT+3,"turn":10,"owner":{"generation":12}}),
         // Normal completion is not a cancellation and must not become one.
-        json!({"kind":"turn_finished","at_us":AT+4,"turn":10,"outcome":"audio_written_unscored"}),
+        json!({"kind":"turn_finished","at_us":AT+4,"turn":10,"generation":12,"outcome":"audio_written_unscored","playback_gaps":0}),
     ];
     assert_eq!(sink.scan(&trace, AT + 5), None);
     let mut bytes = [0; CUE_MAX_BYTES];
@@ -536,6 +537,7 @@ fn conversation_cues_preserve_turns_endpoints_and_cancellation_reasons() {
         "local_endpoint",
         "cancelled",
         "input_admitted",
+        "turn_completed",
     ]
     .iter()
     .enumerate()
@@ -545,8 +547,8 @@ fn conversation_cues_preserve_turns_endpoints_and_cancellation_reasons() {
         assert_eq!(cue["sequence"], index + 1);
         assert_eq!(cue["kind"], *kind);
         assert_eq!(cue["event_us"], AT + index as u64);
-        assert_eq!(cue["turn"], if index == 3 { 10 } else { 9 });
-        assert_eq!(cue["generation"], if index == 3 { 12 } else { 11 });
+        assert_eq!(cue["turn"], if index >= 3 { 10 } else { 9 });
+        assert_eq!(cue["generation"], if index >= 3 { 12 } else { 11 });
         assert_eq!(
             cue["reason"],
             if index == 2 {
@@ -555,6 +557,10 @@ fn conversation_cues_preserve_turns_endpoints_and_cancellation_reasons() {
                 Value::Null
             }
         );
+        if index == 4 {
+            assert_eq!(cue["outcome"], "audio_written_unscored");
+            assert_eq!(cue["playback_gaps"], 0);
+        }
     }
     assert_eq!(
         peer.recv(&mut bytes).unwrap_err().kind(),
@@ -627,7 +633,7 @@ fn stale_cue_and_peer_loss_latch_invalid_without_blocking_or_retrying() {
 fn cue_backpressure_is_bounded_and_latches_without_affecting_authority() {
     let private = Private::new();
     let (_peer, mut sink) = bound_cue(&private);
-    let trace:Vec<_>=(0..4000).map(|i|json!({"kind":"speaker_first_write","at_us":AT+i,"turn":1,"owner":{"generation":3}})).collect();
+    let trace:Vec<_>=(0..4000).map(|i|json!({"kind":"speaker_first_write","at_us":AT+i,"turn":1,"owner":{"generation":3},"playback_sequence":i+1})).collect();
     let started = Instant::now();
     assert!(sink.scan(&trace, AT + 4000).is_some());
     assert!(started.elapsed() < Duration::from_secs(1));
@@ -774,6 +780,9 @@ fn maximal_cue_fields_fit_the_fixed_datagram_without_truncation() {
         json!({"kind":"capture_started","details":{"epoch":u64::MAX}}),
         json!({"kind":"reference_clock","details":{"playback_epoch":u64::MAX}}),
         json!({"kind":"turn_finished","at_us":event_us,"turn":u64::MAX,"owner":{"generation":u64::MAX},"outcome":"input_discontinuity"}),
+        json!({"kind":"speaker_first_write","at_us":event_us,"turn":u64::MAX,"owner":{"generation":u64::MAX},"playback_sequence":u64::MAX}),
+        json!({"kind":"speech_final_sample_retired","at_us":event_us,"turn":u64::MAX,"owner":{"generation":u64::MAX},"playback_sequence":u64::MAX}),
+        json!({"kind":"turn_finished","at_us":event_us,"turn":u64::MAX,"generation":u64::MAX,"outcome":"audio_written_with_playback_gaps_unscored","playback_gaps":u64::MAX}),
     ];
     assert_eq!(sink.scan(&trace, event_us + 1), None);
     let mut data = [0; CUE_MAX_BYTES];
@@ -782,6 +791,83 @@ fn maximal_cue_fields_fit_the_fixed_datagram_without_truncation() {
     assert_eq!(parsed["turn"], u64::MAX);
     assert_eq!(parsed["expires_us"], event_us + 100_000);
     assert_eq!(parsed["reason"], "input_discontinuity");
+    for kind in ["speaker_first_write", "speech_retired", "turn_completed"] {
+        let count = peer.recv(&mut data).unwrap();
+        let parsed: Value = serde_json::from_slice(&data[..count]).unwrap();
+        assert_eq!(parsed["kind"], kind);
+        assert_eq!(parsed["turn"], u64::MAX);
+        assert_eq!(parsed["generation"], u64::MAX);
+        assert_eq!(parsed["expires_us"], event_us + 100_000);
+        if kind == "turn_completed" {
+            assert_eq!(parsed["playback_gaps"], u64::MAX);
+            assert_eq!(
+                parsed["outcome"],
+                "audio_written_with_playback_gaps_unscored"
+            );
+        } else {
+            assert_eq!(parsed["playback_sequence"], u64::MAX);
+        }
+        // The internal datagram sequence here has one digit. Reserve another
+        // 19 bytes for its eventual maximum u64 representation too.
+        assert!(count + 19 <= CUE_MAX_BYTES);
+        eprintln!(
+            "maximal_{kind}_cue_bytes_including_max_sequence={}",
+            count + 19
+        );
+    }
+}
+
+#[test]
+fn invalid_occurrence_or_completion_metadata_latches_observation_failure() {
+    for event in [
+        json!({"kind":"speaker_first_write","at_us":AT,"turn":1,"owner":{"generation":2}}),
+        json!({"kind":"speech_final_sample_retired","at_us":AT,"turn":1,"owner":{"generation":2},"playback_sequence":0}),
+        json!({"kind":"turn_finished","at_us":AT,"turn":1,"outcome":"audio_written_unscored","playback_gaps":0}),
+        json!({"kind":"turn_finished","at_us":AT,"turn":1,"generation":2,"outcome":"audio_written_unscored"}),
+    ] {
+        let private = Private::new();
+        let (peer, mut sink) = bound_cue(&private);
+        assert!(sink.scan(&[event], AT + 1).is_some());
+        assert!(sink.fault().is_some());
+        assert_eq!(
+            peer.recv(&mut [0; CUE_MAX_BYTES]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn multiple_playback_occurrences_remain_one_turn_until_completion() {
+    let private = Private::new();
+    let (peer, mut sink) = bound_cue(&private);
+    let trace = vec![
+        json!({"kind":"input_admitted","at_us":AT,"turn":7,"owner":{"generation":9}}),
+        json!({"kind":"local_endpoint","at_us":AT+1,"turn":7,"owner":{"generation":9}}),
+        json!({"kind":"speaker_first_write","at_us":AT+2,"turn":7,"owner":{"generation":9},"playback_sequence":11}),
+        json!({"kind":"speech_final_sample_retired","at_us":AT+3,"turn":7,"owner":{"generation":9},"playback_sequence":11}),
+        json!({"kind":"speaker_first_write","at_us":AT+4,"turn":7,"owner":{"generation":9},"playback_sequence":12}),
+        json!({"kind":"speech_final_sample_retired","at_us":AT+5,"turn":7,"owner":{"generation":9},"playback_sequence":12}),
+        json!({"kind":"turn_finished","at_us":AT+6,"turn":7,"generation":9,"outcome":"audio_written_with_playback_gaps_unscored","playback_gaps":2}),
+    ];
+    assert_eq!(sink.scan(&trace, AT + 7), None);
+    for (index, expected) in [None, None, Some(11), Some(11), Some(12), Some(12), None]
+        .into_iter()
+        .enumerate()
+    {
+        let mut bytes = [0; CUE_MAX_BYTES];
+        let count = peer.recv(&mut bytes).unwrap();
+        let cue: Value = serde_json::from_slice(&bytes[..count]).unwrap();
+        assert_eq!(cue["sequence"], index + 1);
+        assert_eq!(cue["turn"], 7);
+        assert_eq!(cue["generation"], 9);
+        assert_eq!(cue["playback_sequence"].as_u64(), expected);
+        if index == 6 {
+            assert_eq!(cue["kind"], "turn_completed");
+            assert_eq!(cue["playback_gaps"], 2);
+        } else {
+            assert_ne!(cue["kind"], "turn_completed");
+        }
+    }
 }
 
 fn channel_pair(private: &Private) -> (WorkerChannels, WorkerChannels) {

@@ -17,7 +17,7 @@ use serde_json::json;
 use std::path::PathBuf;
 
 /// Version of the self-test contract, separate from the run-plan schema.
-pub const SUITE_VERSION: u32 = 1;
+pub const SUITE_VERSION: u32 = 2;
 
 /// Exact embedded inputs used by the self-test, never the caller's run plan.
 #[derive(Clone, Debug, Serialize)]

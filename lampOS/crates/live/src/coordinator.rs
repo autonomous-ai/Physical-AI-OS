@@ -91,10 +91,39 @@ struct Reply {
     last_provider_audio_at_us: Option<u64>,
 }
 impl Reply {
+    fn append_provider_audio(&mut self, samples: Vec<i16>, received_at_us: u64) {
+        // Generation completion is not turn completion. A new generation may
+        // arrive while the previous generation's accepted final PCM is still
+        // playing. Preserve that receipt identity until it actually retires.
+        self.generation_done = false;
+        self.pcm.extend(samples);
+        self.last_provider_audio_at_us = Some(received_at_us);
+    }
+
+    fn retire_playback(&mut self, sequence: u64, final_frame: u64) -> io::Result<PlaybackToken> {
+        if self.final_chunk != Some(sequence) || final_frame == 0 {
+            return Err(io::Error::other(
+                "speech retirement has no matching final chunk",
+            ));
+        }
+        let token = self
+            .playback
+            .take()
+            .ok_or_else(|| io::Error::other("speech retirement has no playback occurrence"))?;
+        self.final_chunk = None;
+        Ok(token)
+    }
+
     // Retain at most one full block until generation completion identifies the
     // final block. The trace exposes this holdback separately from provider delay.
     fn next_speaker_chunk(&mut self) -> Option<(Vec<i16>, bool)> {
-        if self.pcm.is_empty() || (!self.generation_done && self.pcm.len() <= 240) {
+        // The speaker keeps one final cursor. Serialize playback occurrences
+        // through its real retirement receipt instead of overwriting that
+        // cursor when the same turn receives another Gemini generation.
+        if self.final_chunk.is_some()
+            || self.pcm.is_empty()
+            || (!self.generation_done && self.pcm.len() <= 240)
+        {
             return None;
         }
         let final_chunk = self.generation_done && self.pcm.len() <= 240;
@@ -954,13 +983,14 @@ fn conversation(
                             return Err(io::Error::other("speaker accepted too many frames").into());
                         }
                         if current.playback.is_none() {
-                            current.playback = Some(owner.playback_started(now(), pending.permit)?);
+                            let token = owner.playback_started(now(), pending.permit)?;
+                            current.playback = Some(token);
                             snapshot = owner.snapshot(now())?;
                             rig.publish(snapshot)?;
                             last_publish = monotonic_us();
                             record(
                                 trace,
-                                json!({"kind":"speaker_first_write","turn":turn,"owner":current.owner,"at_us":observed_at_us,"boundary":"ALSA accepted; acoustic onset unmeasured"}),
+                                json!({"kind":"speaker_first_write","turn":turn,"owner":current.owner,"playback_sequence":token.sequence(),"at_us":observed_at_us,"boundary":"ALSA accepted; acoustic onset unmeasured"}),
                             )?;
                         }
                         if pending.accepted == 240 {
@@ -978,15 +1008,7 @@ fn conversation(
                     observed_at_us,
                 } => {
                     if let Some(current) = reply.as_mut().filter(|reply| reply.owner == delivered) {
-                        if current.final_chunk != Some(sequence) || final_sample.frame == 0 {
-                            return Err(io::Error::other(
-                                "speech retirement has no matching final chunk",
-                            )
-                            .into());
-                        }
-                        let token = current.playback.take().ok_or_else(|| {
-                            io::Error::other("speech retirement has no playback occurrence")
-                        })?;
+                        let token = current.retire_playback(sequence, final_sample.frame)?;
                         owner.playback_ended(now(), token)?;
                         snapshot = owner.snapshot(now())?;
                         rig.publish(snapshot)?;
@@ -994,7 +1016,7 @@ fn conversation(
                         record(
                             trace,
                             json!({"kind":"speech_final_sample_retired","turn":delivered.turn(),"owner":delivered,
-                            "at_us":observed_at_us,"final_sample":final_sample,"boundary":"ALSA delay retirement; idle zeros may remain queued; acoustic end unmeasured"}),
+                            "playback_sequence":token.sequence(),"at_us":observed_at_us,"final_sample":final_sample,"boundary":"ALSA delay retirement; idle zeros may remain queued; acoustic end unmeasured"}),
                         )?;
                     }
                 }
@@ -1082,13 +1104,8 @@ fn conversation(
                             )?;
                             current.had_audio = true;
                         }
-                        if current.generation_done {
-                            current.generation_done = false;
-                            current.final_chunk = None;
-                        }
                         let received_frames = samples.len();
-                        current.pcm.extend(samples);
-                        current.last_provider_audio_at_us = Some(received_at_us);
+                        current.append_provider_audio(samples, received_at_us);
                         record(
                             trace,
                             json!({"kind":"provider_audio_enqueued","turn":request,
@@ -1429,7 +1446,7 @@ fn conversation(
             last_publish = monotonic_us();
             record(
                 trace,
-                json!({"kind":"turn_finished","turn":turn,"at_us":monotonic_us(),"outcome":current.delivery_outcome(),"playback_gaps":current.playback_gaps}),
+                json!({"kind":"turn_finished","turn":turn,"generation":current.owner.generation(),"at_us":monotonic_us(),"outcome":current.delivery_outcome(),"playback_gaps":current.playback_gaps}),
             )?;
             *reply = None;
         }
@@ -2205,6 +2222,249 @@ mod tests {
             source_frames: samples.len(),
             source_offset: 0,
             samples,
+        }
+    }
+
+    #[test]
+    fn continued_generation_preserves_the_accepted_final_chunk_retirement() {
+        let (mut owner, mut current, _) = active_reply();
+        let original_playback = current.playback.unwrap();
+        current.pcm.clear();
+        current.generation_done = true;
+        current.final_chunk = Some(41);
+        current.append_provider_audio(vec![22; 480], monotonic_us());
+        let token = current.retire_playback(41, 720).unwrap();
+        assert_eq!(token, original_playback);
+        owner.playback_ended(now(), token).unwrap();
+        assert_eq!(current.final_chunk, None);
+        assert_eq!(current.pcm, vec![22; 480]);
+        assert!(!current.generation_done);
+        assert!(current.playback.is_none());
+        assert_eq!(owner.snapshot(now()).unwrap().owner(), Some(current.owner));
+    }
+
+    #[test]
+    fn continued_generation_waits_for_the_previous_playback_occurrence_to_retire() {
+        let (_, mut current, _) = active_reply();
+        current.pcm.clear();
+        current.generation_done = true;
+        current.final_chunk = Some(41);
+        current.append_provider_audio(vec![22; 480], monotonic_us());
+        assert!(
+            current.next_speaker_chunk().is_none(),
+            "a later generation must not overwrite the speaker's unretired final cursor"
+        );
+        assert_eq!(current.pcm, vec![22; 480]);
+    }
+
+    #[test]
+    fn continued_generation_interleavings_preserve_pcm_and_distinct_playback_tokens() {
+        use crate::playback::SpeechPlayback;
+        use lamp_audio::ownership::{PlaybackCursor, QueuedRange};
+
+        // Audio may continue before final acceptance, before final retirement,
+        // or after retirement. All are legal within one Gemini request.
+        for arrival in 0..3 {
+            let dir = SessionDirectory::create().unwrap();
+            let (mut parent, mut speaker) = pair(&dir, "speaker");
+            let (mut owner, mut current, _) = active_reply();
+            let turn = current.owner;
+            let first_token = current.playback.unwrap();
+            current.pcm = vec![11; 240].into();
+            current.generation_done = true;
+            let mut reply = Some(current);
+            let mut pending = None;
+            let mut sequence = 0;
+            let mut snapshot = owner.snapshot(now()).unwrap();
+            dispatch_speaker_chunk(
+                &mut owner,
+                &mut reply,
+                &mut parent.data,
+                &mut pending,
+                &mut sequence,
+                &mut snapshot,
+            )
+            .unwrap();
+            let first = speaker.data.receive::<SpeakerChunk>().unwrap().unwrap();
+            assert!(first.end_of_speech);
+            let mut played = first.samples.clone();
+            if arrival == 0 {
+                reply
+                    .as_mut()
+                    .unwrap()
+                    .append_provider_audio(vec![22; 480], monotonic_us());
+            }
+            // No second chunk can bypass the outstanding final acceptance.
+            dispatch_speaker_chunk(
+                &mut owner,
+                &mut reply,
+                &mut parent.data,
+                &mut pending,
+                &mut sequence,
+                &mut snapshot,
+            )
+            .unwrap();
+            assert!(speaker.data.receive::<SpeakerChunk>().unwrap().is_none());
+            assert_eq!(pending.as_ref().unwrap().sequence, first.chunk_sequence);
+            pending = None; // Simulated full speaker acceptance of this chunk.
+            reply.as_mut().unwrap().final_chunk = Some(first.chunk_sequence);
+            if arrival == 1 {
+                reply
+                    .as_mut()
+                    .unwrap()
+                    .append_provider_audio(vec![22; 480], monotonic_us());
+            }
+            dispatch_speaker_chunk(
+                &mut owner,
+                &mut reply,
+                &mut parent.data,
+                &mut pending,
+                &mut sequence,
+                &mut snapshot,
+            )
+            .unwrap();
+            assert!(pending.is_none());
+            assert!(speaker.data.receive::<SpeakerChunk>().unwrap().is_none());
+
+            let mut playback = SpeechPlayback::default();
+            let first_cursor = PlaybackCursor { epoch: 1, frame: 0 };
+            let end_cursor = PlaybackCursor {
+                epoch: 1,
+                frame: 240,
+            };
+            playback
+                .speech_accepted(
+                    turn,
+                    first.chunk_sequence,
+                    first_cursor,
+                    end_cursor,
+                    1,
+                    true,
+                )
+                .unwrap();
+            let retired = playback
+                .take_retired(QueuedRange {
+                    epoch: 1,
+                    retired_through: 240,
+                    accepted_through: 240,
+                })
+                .unwrap();
+            let token = reply
+                .as_mut()
+                .unwrap()
+                .retire_playback(retired.sequence, retired.cursor.frame)
+                .unwrap();
+            assert_eq!(token, first_token);
+            owner.playback_ended(now(), token).unwrap();
+            assert_eq!(owner.snapshot(now()).unwrap().owner(), Some(turn));
+            if arrival == 2 {
+                reply
+                    .as_mut()
+                    .unwrap()
+                    .append_provider_audio(vec![22; 480], monotonic_us());
+            }
+            reply.as_mut().unwrap().generation_done = true;
+            let mut frame = 240;
+            let mut second_token = None;
+            for _ in 0..2 {
+                dispatch_speaker_chunk(
+                    &mut owner,
+                    &mut reply,
+                    &mut parent.data,
+                    &mut pending,
+                    &mut sequence,
+                    &mut snapshot,
+                )
+                .unwrap();
+                let chunk = speaker.data.receive::<SpeakerChunk>().unwrap().unwrap();
+                let accepted = pending.take().unwrap();
+                assert_eq!(accepted.sequence, chunk.chunk_sequence);
+                let current = reply.as_mut().unwrap();
+                if current.playback.is_none() {
+                    let token = owner.playback_started(now(), accepted.permit).unwrap();
+                    assert_eq!(token.owner(), turn);
+                    assert!(token.sequence() > first_token.sequence());
+                    current.playback = Some(token);
+                    second_token = Some(token);
+                }
+                if accepted.final_chunk {
+                    current.final_chunk = Some(accepted.sequence);
+                }
+                // A duplicated receipt from occurrence one cannot retire two.
+                assert!(current.retire_playback(first.chunk_sequence, 240).is_err());
+                assert_eq!(current.playback, second_token);
+                playback
+                    .speech_accepted(
+                        turn,
+                        chunk.chunk_sequence,
+                        PlaybackCursor { epoch: 1, frame },
+                        PlaybackCursor {
+                            epoch: 1,
+                            frame: frame + 240,
+                        },
+                        frame,
+                        chunk.end_of_speech,
+                    )
+                    .unwrap();
+                frame += 240;
+                played.extend(chunk.samples);
+            }
+            let retired = playback
+                .take_retired(QueuedRange {
+                    epoch: 1,
+                    retired_through: frame,
+                    accepted_through: frame,
+                })
+                .unwrap();
+            let current = reply.as_mut().unwrap();
+            assert_eq!(retired.cursor.epoch, 1);
+            let token = current
+                .retire_playback(retired.sequence, retired.cursor.frame)
+                .unwrap();
+            assert_eq!(Some(token), second_token);
+            owner.playback_ended(now(), token).unwrap();
+            assert!(current.pcm.is_empty());
+            assert!(current.playback.is_none());
+            assert!(current.final_chunk.is_none());
+            assert!(
+                !current.provider_idle,
+                "retirement is not provider completion"
+            );
+            assert_eq!(played, [vec![11; 240], vec![22; 480]].concat());
+            current.provider_idle = true;
+            owner.complete_turn(now(), current.owner).unwrap();
+            assert!(owner.snapshot(now()).unwrap().owner().is_none());
+        }
+    }
+
+    #[test]
+    fn cancellation_between_or_during_later_generations_revokes_the_same_turn() {
+        for second_started in [false, true] {
+            let (mut owner, mut current, first_permit) = active_reply();
+            current.pcm.clear();
+            current.final_chunk = Some(1);
+            let token = current.retire_playback(1, 240).unwrap();
+            owner.playback_ended(now(), token).unwrap();
+            current.append_provider_audio(vec![22; 480], monotonic_us());
+            let permit = owner.issue_output(now(), current.plan, 100_000).unwrap();
+            if second_started {
+                current.playback = Some(owner.playback_started(now(), permit).unwrap());
+                current.final_chunk = Some(3);
+            }
+            let turn = current.owner;
+            let mut reply = Some(current);
+            let mut trace = Vec::new();
+            cancel_reply(&mut owner, &mut reply, &mut trace, "user_interrupted").unwrap();
+            assert!(reply.is_none());
+            let state = owner.snapshot(now()).unwrap();
+            assert!(state.owner().is_none());
+            let mut guard = BoundaryGuard::new(state.boot(), now());
+            guard.install(now(), state).unwrap();
+            for permit in [first_permit, permit] {
+                assert!(guard.check(now(), permit, OutputKind::Speech).is_err());
+            }
+            assert_eq!(trace[0]["outcome"], "user_interrupted");
+            assert_eq!(trace[0]["owner"], serde_json::to_value(turn).unwrap());
         }
     }
 

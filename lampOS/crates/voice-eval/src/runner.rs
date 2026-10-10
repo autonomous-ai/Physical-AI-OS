@@ -9,6 +9,7 @@ use crate::{
     events::{ClockDomain, EventKind, RuntimeEvent},
     ledger::{Ledger, unix_ms},
     plan::{LoadedPlan, Scenario, Step, TriggerEvent},
+    playback::PlaybackHistory,
     record::{
         AttemptRecord, AttemptStatus, Attribution, ClockMapping, StepRecord, StepStatus,
         StimulusSource, Stratum, TriggerObservation,
@@ -140,6 +141,7 @@ impl LiveView {
                             TriggerEvent::SpeakerFirstWrite
                         )
                         | (EventKind::SpeechRetired, TriggerEvent::SpeechRetired)
+                        | (EventKind::TurnCompleted { .. }, TriggerEvent::TurnCompleted)
                         | (EventKind::TurnCancelled { .. }, TriggerEvent::TurnCancelled)
                 );
                 kind && (after == TriggerEvent::ListeningReady
@@ -158,20 +160,23 @@ impl LiveView {
     /// Whether the reply has started and has no terminal event yet.
     fn speaking(&self, turn: Option<u64>) -> bool {
         let Some(turn) = turn else { return false };
-        let mut started = false;
+        let mut history = PlaybackHistory::default();
         for (event, _, _) in &self.events {
             if event.turn != Some(turn) {
                 continue;
             }
             match event.kind {
-                EventKind::SpeakerFirstWrite => started = true,
-                EventKind::SpeechRetired
-                | EventKind::TurnCancelled { .. }
-                | EventKind::TurnCompleted { .. } => return false,
+                EventKind::SpeakerFirstWrite => {
+                    let _ = history.start(event.playback_sequence, event.at_us.unwrap_or(0));
+                }
+                EventKind::SpeechRetired => {
+                    let _ = history.retire(event.playback_sequence, event.at_us.unwrap_or(0));
+                }
+                EventKind::TurnCancelled { .. } | EventKind::TurnCompleted { .. } => return false,
                 _ => {}
             }
         }
-        started && !self.ended
+        history.active() && history.error().is_none() && !self.ended
     }
 }
 
@@ -508,4 +513,51 @@ pub fn run_suite(
         true,
     )?;
     Ok(records)
+}
+
+#[cfg(test)]
+mod occurrence_tests {
+    use super::*;
+    use crate::events::EventSource;
+    fn observe(view: &mut LiveView, kind: EventKind, sequence: Option<u64>, at: u64) {
+        let mut event =
+            RuntimeEvent::new(kind, Some(1), at, ClockDomain::Virtual, EventSource::Fake);
+        event.playback_sequence = sequence;
+        view.observe(event, at, "identity".into());
+    }
+    #[test]
+    fn second_occurrence_is_speaking_but_first_retirement_is_not_completion() {
+        let mut view = LiveView::default();
+        observe(&mut view, EventKind::SpeakerFirstWrite, Some(1), 10);
+        observe(&mut view, EventKind::SpeechRetired, Some(1), 20);
+        assert!(!view.speaking(Some(1)));
+        assert!(view.find(TriggerEvent::TurnCompleted, 0, 0).is_none());
+        observe(&mut view, EventKind::SpeakerFirstWrite, Some(2), 30);
+        assert!(view.speaking(Some(1)));
+        observe(&mut view, EventKind::SpeechRetired, Some(2), 40);
+        assert!(!view.speaking(Some(1)));
+        assert!(view.find(TriggerEvent::TurnCompleted, 0, 0).is_none());
+        observe(
+            &mut view,
+            EventKind::TurnCompleted {
+                outcome: "audio_written_unscored".into(),
+                playback_gaps: 0,
+            },
+            None,
+            50,
+        );
+        assert_eq!(
+            view.find(TriggerEvent::TurnCompleted, 0, 0)
+                .unwrap()
+                .event_at_us,
+            Some(50)
+        );
+        assert_eq!(
+            view.find(TriggerEvent::SpeechRetired, 0, 0)
+                .unwrap()
+                .event_at_us,
+            Some(20),
+            "legacy occurrence trigger keeps its meaning"
+        );
+    }
 }

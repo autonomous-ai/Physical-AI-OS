@@ -10,9 +10,22 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
-- Gemini and fixture conversations now share the optional lifecycle cue channel.
-  The runner can trigger actual-retirement follow-ups and in-playback topic
-  changes, preserving ownership, expiry and original observation times.
+- Fixed same-turn audio continuation losing an accepted final chunk and ending
+  the session. Playback occurrences now retain separate tokens; whole-turn
+  completion remains distinct. The runner waits for that completion, counts
+  every segment and rejects malformed or incomplete evidence. New v2 plans
+  keep historical v1 bytes unchanged. Combined source `6b0ea9e3` passed
+  **753 host tests, zero failed or ignored**, formatting, strict Clippy and
+  both release builds. See [playback occurrences](docs/playback-occurrences.md)
+  for the original failures, exact commands, source identity and limits.
+  No new ARM64, cloud, device or acoustic result follows. The separate ring
+  renewal trace-capacity correction is still pending integration.
+
+- The preceding checkpoint made Gemini and fixture conversations share the
+  optional lifecycle cue channel.
+  Its runner originally triggered follow-ups from a single retirement; the
+  new occurrence correction above replaces that incomplete assumption.
+  Ownership, expiry and original observation times remain preserved.
   Combined source `5a827d27` passed **724 host tests, zero failed or
   ignored**, formatting, strict Clippy and both release builds. See
   [directed cue integration](docs/directed-cues-integration-20261011.md) for

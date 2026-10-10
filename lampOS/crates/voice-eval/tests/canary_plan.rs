@@ -81,7 +81,7 @@ fn every_result_identifies_the_embedded_canonical_plan_and_catalog() {
     assert!(!results.is_empty());
     assert!(canary::all_detected(&results), "{results:#?}");
     let expected = json!({
-        "suite_version":1,
+        "suite_version":2,
         "plan_id":canonical.plan.id,
         "plan_version":canonical.plan.version,
         "plan_sha256":canonical.sha256,

@@ -55,9 +55,11 @@ loudspeaker cannot establish spatial speaker discrimination.
 
 ## Scenario plan and stimuli
 
-`fixtures/voice-eval-v1.json` is the pre-registered plan: 42 scenarios with
+`fixtures/voice-eval-v2.json` is the current pre-registered plan: 42 scenarios with
 expected behavior per step, triggers, deadlines, fake replies/faults and three
-fake profiles. `fixtures/voice-eval-stimuli-v1.json` extends `desk-v1` with
+fake profiles. It changes ordinary follow-ups to the whole-turn completion
+trigger; the original v1 plan and its hashes remain unchanged and readable.
+`fixtures/voice-eval-stimuli-v1.json` extends `desk-v1` with
 eight utterances and seventeen scenes. `desk-v1.json` is unchanged (SHA-256
 `636a5199…`); extension utterances that reuse a desk ID must be identical and
 scene IDs may not collide. Eight of the new scenes only remix cached speech (for
@@ -93,7 +95,8 @@ fault injection claimed as physical.
 ## Event triggering and retention
 
 The first step follows `listening_ready`; later steps follow
-`speaker_first_write`, `speech_retired` or `turn_cancelled` of a turn newer than
+`speaker_first_write`, `turn_completed` or `turn_cancelled` (historical plans may
+still use occurrence-level `speech_retired`) of a turn newer than
 every turn known when the previous step started, then wait the declared delay.
 Waiting is bounded by the step deadline. A missing event gives `trigger_missed`;
 an ended session `session_ended`; a planned start that passed more than 100 ms
@@ -134,9 +137,13 @@ single-stimulus scenario defaults to the first admission.
 A `user_interrupted` cancellation is caused by the admission whose speech
 candidate is within 20 ms of it. A planned `interrupt_and_answer` step yields as
 planned; anything else, including background talk, is a **false interruption**.
-A provider interruption without planned speech is also false. A reply whose
-final sample retired before a later input revoked it counts as complete. Overlap
-steps whose stimulus started after the reply had ended are unscored
+A provider interruption without planned speech is also false. One turn may
+have several playback occurrences, identified by positive `playback_sequence`.
+Retiring one occurrence does not complete the turn: only a valid whole-turn
+completion after all occurrences can earn transport completion. Cancellation
+during a later occurrence or in the gap between occurrences stays truncated
+unless it was an intended yield. Overlap steps outside an actual occurrence
+(including the gap between generations) are unscored
 (`overlap_not_achieved`), and a start more than 250 ms late is flagged
 `late_stimulus`. An injected fault pre-empted by another cancellation is
 unscored, not failed.
@@ -155,7 +162,14 @@ speaker output for a turn after it was revoked, never two replies playing at
 once, every admitted turn terminated in a completed run, and, when the runtime
 records ring requests (`--ring-channel-ceiling`), no cue for an ended turn and
 each listening/waiting/speaking cue consistent with that turn's voice state
-within 50 ms. Attempts without ring requests are counted as ring-unchecked.
+within 50 ms, across every playback occurrence. Exposure sums each software
+playback interval through retirement/cancellation and excludes the gaps between
+generations; it is not audible duration. The first-write latency remains the
+first occurrence's start. Stale/mismatched/duplicate retirement and ambiguous
+legacy multi-occurrence records invalidate evidence rather than mint completion.
+A legacy single occurrence with explicit valid terminal evidence remains
+readable. Attempts without ring requests are counted as ring-unchecked.
+See [directed cue lifecycle](voice-eval-directed-cues.md).
 
 Latency rows are labeled `simulated` (fake profile; restates configured delays),
 `software` (lamp-live host clock), `runner` (start-request lateness) or

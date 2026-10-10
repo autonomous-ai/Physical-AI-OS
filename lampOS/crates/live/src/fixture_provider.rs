@@ -640,6 +640,7 @@ pub enum CueKind {
     SpeakerFirstWrite,
     Cancelled,
     SpeechRetired,
+    TurnCompleted,
     RunEnd,
 }
 #[derive(Serialize)]
@@ -657,6 +658,12 @@ struct Cue<'a> {
     expires_us: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playback_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playback_gaps: Option<u64>,
 }
 struct FixedBytes {
     bytes: [u8; CUE_MAX_BYTES],
@@ -758,6 +765,7 @@ impl CueSink {
                 Some("turn_finished") if event["owner"].is_object() => {
                     self.emit(CueKind::Cancelled, event, sent_us)
                 }
+                Some("turn_finished") => self.emit(CueKind::TurnCompleted, event, sent_us),
                 Some("run_end") => self.emit(CueKind::RunEnd, event, sent_us),
                 _ => {}
             }
@@ -785,13 +793,48 @@ impl CueSink {
                 .sequence
                 .checked_add(1)
                 .ok_or_else(|| invalid("cue sequence exhausted"))?;
+            let playback_sequence =
+                if matches!(kind, CueKind::SpeakerFirstWrite | CueKind::SpeechRetired) {
+                    Some(
+                        event["playback_sequence"]
+                            .as_u64()
+                            .filter(|n| *n > 0)
+                            .ok_or_else(|| invalid("cue has no playback occurrence"))?,
+                    )
+                } else {
+                    None
+                };
+            let (outcome, playback_gaps) = if matches!(kind, CueKind::TurnCompleted) {
+                let outcome = event["outcome"]
+                    .as_str()
+                    .filter(|outcome| {
+                        matches!(
+                            *outcome,
+                            "no_audio_answer"
+                                | "audio_written_unscored"
+                                | "audio_written_with_playback_gaps_unscored"
+                        )
+                    })
+                    .ok_or_else(|| invalid("cue has no completion outcome"))?;
+                let gaps = event["playback_gaps"]
+                    .as_u64()
+                    .ok_or_else(|| invalid("cue has no completion gap count"))?;
+                if event["generation"].as_u64().is_none_or(|n| n == 0) {
+                    return Err(invalid("cue has no completed owner generation"));
+                }
+                (Some(outcome), Some(gaps))
+            } else {
+                (None, None)
+            };
             let cue = Cue {
                 schema: 1,
                 sequence,
                 kind,
                 boot,
                 turn: event["turn"].as_u64(),
-                generation: event["owner"]["generation"].as_u64(),
+                generation: event["owner"]["generation"]
+                    .as_u64()
+                    .or_else(|| event["generation"].as_u64()),
                 capture_epoch: self.capture_epoch,
                 reference_epoch_context: self.reference_epoch,
                 event_us,
@@ -802,6 +845,9 @@ impl CueSink {
                 } else {
                     None
                 },
+                playback_sequence,
+                outcome,
+                playback_gaps,
             };
             let mut bytes = FixedBytes {
                 bytes: [0; CUE_MAX_BYTES],

@@ -50,7 +50,12 @@ fn config_with_fault(
         command.extend(["--runtime-prefix-arg".to_owned(), arg.to_owned()]);
     }
     if let Some(fault) = fault {
-        for arg in ["--fake-cue-fault", fault] {
+        let option = if fault == "two" {
+            "--fake-generations"
+        } else {
+            "--fake-cue-fault"
+        };
+        for arg in [option, fault] {
             command.extend(["--runtime-prefix-arg".to_owned(), arg.to_owned()]);
         }
     }
@@ -324,7 +329,7 @@ fn assert_directed_receipts(record: &lamp_voice_eval::record::AttemptRecord) {
 }
 
 #[test]
-fn directed_followup_waits_for_original_reply_retirement_then_admits_a_new_turn() {
+fn directed_followup_waits_for_whole_reply_completion_then_admits_a_new_turn() {
     let (record, score) = run_mode(
         "rapid-follow-up",
         &["mid-sentence-address", "rapid-followup"],
@@ -340,7 +345,7 @@ fn directed_followup_waits_for_original_reply_retirement_then_admits_a_new_turn(
             .all(|s| s.status == StepStatus::Injected)
     );
     let followup = &record.steps[1];
-    let retired = cue_time(&record, "speech_retired", 1);
+    let retired = cue_time(&record, "turn_completed", 1);
     assert_eq!(followup.bound_turn, Some(1));
     assert_eq!(
         followup.trigger.as_ref().unwrap().event_at_us,
@@ -557,4 +562,115 @@ fn a_transport_that_closes_mid_trace_invalidates_the_attempt() {
     );
     let score = evaluate::score(&record, plan.plan.answer_deadline_ms, None);
     assert_eq!(score.outcome, Outcome::Invalid);
+}
+
+#[test]
+fn directed_two_occurrences_wait_for_true_completion_before_followup() {
+    let (record, score) = run_mode(
+        "rapid-follow-up",
+        &["mid-sentence-address", "rapid-followup"],
+        directed(),
+        23,
+        Some("two"),
+    );
+    assert_directed_receipts(&record);
+    assert!(
+        record
+            .steps
+            .iter()
+            .all(|s| s.status == StepStatus::Injected)
+    );
+    let starts: Vec<_> = record
+        .live_events
+        .iter()
+        .filter(|e| e.turn == Some(1) && matches!(e.kind, EventKind::SpeakerFirstWrite))
+        .collect();
+    let retires: Vec<_> = record
+        .live_events
+        .iter()
+        .filter(|e| e.turn == Some(1) && matches!(e.kind, EventKind::SpeechRetired))
+        .collect();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(retires.len(), 2);
+    assert_eq!(starts[0].playback_sequence, Some(1));
+    assert_eq!(starts[1].playback_sequence, Some(2));
+    assert_eq!(retires[1].playback_sequence, Some(2));
+    let complete = cue_time(&record, "turn_completed", 1);
+    assert!(complete >= retires[1].at_us.unwrap());
+    assert_eq!(
+        record.steps[1].trigger.as_ref().unwrap().event_at_us,
+        Some(complete)
+    );
+    assert!(cue_time(&record, "input_admitted", 2) > complete);
+    assert_eq!(
+        score.steps[0].answer,
+        Some(evaluate::AnswerOutcome::Complete)
+    );
+}
+#[test]
+fn directed_interruption_during_second_occurrence_preserves_owner_and_yields() {
+    let (record, score) = run_mode(
+        "topic-change",
+        &["story-primer", "topic-change"],
+        directed(),
+        24,
+        Some("two"),
+    );
+    assert_directed_receipts(&record);
+    assert_eq!(record.steps[1].status, StepStatus::Injected);
+    let starts: Vec<_> = record
+        .live_events
+        .iter()
+        .filter(|e| e.turn == Some(1) && matches!(e.kind, EventKind::SpeakerFirstWrite))
+        .collect();
+    assert_eq!(starts.len(), 2);
+    assert!(cue_time(&record, "cancelled", 1) > starts[1].at_us.unwrap());
+    assert!(
+        !record
+            .live_events
+            .iter()
+            .any(|e| e.turn == Some(1) && matches!(e.kind, EventKind::TurnCompleted { .. }))
+    );
+    assert!(!record.live_events.iter().any(|e| e.turn == Some(1)
+        && e.playback_sequence == Some(2)
+        && matches!(e.kind, EventKind::SpeechRetired)));
+    assert_eq!(
+        score.steps[0].answer,
+        Some(evaluate::AnswerOutcome::YieldedAsPlanned)
+    );
+    assert_eq!(score.steps[1].interruption, Some(true));
+}
+#[test]
+fn missing_or_stale_whole_completion_withholds_followup_after_valid_retirement() {
+    for fault in ["drop-completion", "stale-completion"] {
+        let (record, score) = run_mode(
+            "rapid-follow-up",
+            &["mid-sentence-address", "rapid-followup"],
+            directed(),
+            15,
+            Some(fault),
+        );
+        assert_eq!(record.steps[0].status, StepStatus::Injected);
+        assert_ne!(record.steps[1].status, StepStatus::Injected);
+        assert!(
+            record
+                .live_events
+                .iter()
+                .any(|e| e.turn == Some(1) && matches!(e.kind, EventKind::SpeechRetired))
+        );
+        assert!(
+            !record
+                .live_events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::TurnCompleted { .. }))
+        );
+        assert!(
+            record
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::TurnCompleted { .. }))
+        );
+        assert_eq!(record.evidence["playbacks"].as_array().unwrap().len(), 1);
+        assert_ne!(score.outcome, Outcome::Passed);
+    }
 }

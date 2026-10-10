@@ -99,13 +99,13 @@ fn follow_ups_are_triggered_by_the_end_of_each_answer() {
     let retired: Vec<u64> = record
         .events
         .iter()
-        .filter(|e| matches!(e.kind, EventKind::SpeechRetired))
+        .filter(|e| matches!(e.kind, EventKind::TurnCompleted { .. }))
         .filter_map(|e| e.at_us)
         .collect();
     assert_eq!(retired.len(), 3);
     for (index, step) in record.steps.iter().enumerate().skip(1) {
         let trigger = step.trigger.as_ref().unwrap();
-        assert_eq!(trigger.event, TriggerEvent::SpeechRetired);
+        assert_eq!(trigger.event, TriggerEvent::TurnCompleted);
         assert_eq!(trigger.event_at_us, Some(retired[index - 1]));
         let delay = s.plan.scenario("follow-up-chain").unwrap().steps[index]
             .trigger
@@ -651,13 +651,16 @@ fn voice_and_ring_state_stay_consistent_through_cancellation_and_breaks_are_dete
         .and_then(|e| e.at_us)
         .unwrap();
     let event = |kind, turn, at| {
-        RuntimeEvent::new(
+        let playback = matches!(kind, EventKind::SpeechRetired).then_some(1);
+        let mut event = RuntimeEvent::new(
             kind,
             Some(turn),
             at,
             ClockDomain::Virtual,
             EventSource::Fake,
-        )
+        );
+        event.playback_sequence = playback;
+        event
     };
     type Mutation = Box<dyn Fn(&mut AttemptRecord)>;
     let cases: Vec<(FindingKind, Mutation)> = vec![
@@ -822,4 +825,97 @@ fn a_session_that_ends_after_a_disconnect_is_scored_as_no_recovery() {
         )[0],
     );
     assert_eq!(slow.outcome, Outcome::Passed, "{:?}", slow.findings);
+}
+
+#[test]
+fn multiple_generations_of_one_turn_still_wait_for_completion_and_keep_overlap() {
+    use lamp_voice_eval::plan::FakeContinuation;
+    for scenario_id in ["rapid-follow-up", "topic-change"] {
+        let mut s = setup();
+        let scenario = s
+            .plan
+            .plan
+            .scenarios
+            .iter_mut()
+            .find(|s| s.id == scenario_id)
+            .unwrap();
+        let first = &mut scenario.fake_replies[0];
+        first.continuations = vec![FakeContinuation {
+            delay_ms: 200,
+            text: first.text.clone(),
+            speech_ms: first.speech_ms,
+        }];
+        first.text = "Synthetic first segment.".into();
+        first.speech_ms = 500;
+        let records = run(&s, "v2-directed-current", &[scenario_id], None);
+        let record = &records[0];
+        let starts: Vec<_> = record
+            .events
+            .iter()
+            .filter(|e| e.turn == Some(1) && matches!(e.kind, EventKind::SpeakerFirstWrite))
+            .collect();
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[1].playback_sequence, Some(2));
+        let idle: Vec<_> = record
+            .events
+            .iter()
+            .filter(|e| e.turn == Some(1) && matches!(e.kind, EventKind::ProviderTurnComplete))
+            .collect();
+        assert!(idle.len() <= 1);
+        assert!(
+            idle.iter()
+                .all(|e| e.at_us.unwrap() > starts[1].at_us.unwrap()),
+            "provider cannot be idle before its continuation"
+        );
+        assert!(
+            record
+                .steps
+                .iter()
+                .all(|s| s.status == StepStatus::Injected)
+        );
+        let score = score(&s, record);
+        if scenario_id == "rapid-follow-up" {
+            let completion = record
+                .events
+                .iter()
+                .find(|e| e.turn == Some(1) && matches!(e.kind, EventKind::TurnCompleted { .. }))
+                .unwrap();
+            assert_eq!(
+                record.steps[1].trigger.as_ref().unwrap().event_at_us,
+                completion.at_us
+            );
+            assert_eq!(score.steps[0].answer, Some(AnswerOutcome::Complete));
+        } else {
+            assert_eq!(score.steps[0].answer, Some(AnswerOutcome::YieldedAsPlanned));
+            assert_eq!(
+                score.steps[1].interruption,
+                Some(true),
+                "{:?}",
+                score.findings
+            );
+        }
+    }
+}
+#[test]
+fn retained_v1_plan_bytes_still_parse_with_occurrence_retirement_triggers() {
+    let s = setup();
+    let old = LoadedPlan::parse(
+        include_str!("../../../fixtures/voice-eval-v1.json"),
+        &s.catalog,
+    )
+    .unwrap();
+    assert_eq!(old.plan.version, 1);
+    assert_eq!(
+        old.scenario("rapid-follow-up").unwrap().steps[1]
+            .trigger
+            .after,
+        TriggerEvent::SpeechRetired
+    );
+    assert_eq!(
+        s.plan.scenario("rapid-follow-up").unwrap().steps[1]
+            .trigger
+            .after,
+        TriggerEvent::TurnCompleted
+    );
+    assert_ne!(old.sha256, s.plan.sha256);
 }

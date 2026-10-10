@@ -14,6 +14,7 @@ use crate::{
         protocol::{RunnerLine, SessionLine},
     },
     plan::{ProviderKind, Scenario, Step},
+    playback::PlaybackHistory,
     record::{ClockMapping, StimulusSource, Stratum},
     runner::{AttemptContext, Backend, Begin, Finished, Injection},
     stimulus::{AssetIndex, SceneTiming, StimulusCatalog},
@@ -189,9 +190,8 @@ struct CueOrder {
 struct CueOwner {
     generation: u64,
     endpoint: bool,
-    playback: bool,
-    retired: bool,
-    cancelled: bool,
+    playback: PlaybackHistory,
+    terminal: bool,
 }
 impl CueOrder {
     fn accept(&mut self, cue: &Cue, lamp_received_us: u64) -> Result<()> {
@@ -219,9 +219,8 @@ impl CueOrder {
                     CueOwner {
                         generation,
                         endpoint: false,
-                        playback: false,
-                        retired: false,
-                        cancelled: false,
+                        playback: PlaybackHistory::default(),
+                        terminal: false,
                     },
                 );
             } else {
@@ -229,20 +228,52 @@ impl CueOrder {
                     .owners
                     .get_mut(&turn)
                     .ok_or_else(|| invalid("cue owner has no admitted input"))?;
-                if owner.generation != generation || owner.cancelled {
+                if owner.generation != generation || owner.terminal {
                     return Err(invalid("cue relabeled or revived a terminal owner"));
                 }
                 match cue.kind.as_str() {
-                    "local_endpoint" if !owner.endpoint && !owner.playback => owner.endpoint = true,
-                    "speaker_first_write"
-                        if owner.endpoint && !owner.playback && !owner.retired =>
-                    {
-                        owner.playback = true
+                    "local_endpoint" if !owner.endpoint && !owner.playback.started() => {
+                        owner.endpoint = true
                     }
-                    "speech_retired" if owner.playback && !owner.retired => owner.retired = true,
-                    // Playback can retire before the provider finishes. A later
-                    // cancellation of that same owner remains a real event.
-                    "cancelled" => owner.cancelled = true,
+                    "speaker_first_write" if owner.endpoint => {
+                        let sequence =
+                            cue.playback_sequence.filter(|n| *n > 0).ok_or_else(|| {
+                                invalid("live playback cue has no occurrence identity")
+                            })?;
+                        owner
+                            .playback
+                            .start(Some(sequence), cue.event_us)
+                            .map_err(invalid)?;
+                    }
+                    "speech_retired" => {
+                        let sequence =
+                            cue.playback_sequence.filter(|n| *n > 0).ok_or_else(|| {
+                                invalid("live retirement cue has no occurrence identity")
+                            })?;
+                        owner
+                            .playback
+                            .retire(Some(sequence), cue.event_us)
+                            .map_err(invalid)?;
+                    }
+                    // Retiring all current PCM is not whole-turn completion.
+                    "cancelled" => owner.terminal = true,
+                    "turn_completed" if owner.endpoint && !owner.playback.active() => {
+                        let audio = cue.outcome.as_deref() != Some("no_audio_answer");
+                        if (audio && !owner.playback.complete())
+                            || (!audio && owner.playback.started())
+                            || owner
+                                .playback
+                                .occurrences
+                                .last()
+                                .and_then(|p| p.retired_us)
+                                .is_some_and(|end| cue.event_us < end)
+                        {
+                            return Err(invalid(
+                                "completion disagrees with playback occurrence history",
+                            ));
+                        }
+                        owner.terminal = true;
+                    }
                     _ => return Err(invalid("cue phase out of order or duplicated")),
                 }
             }
@@ -1007,6 +1038,10 @@ mod cue_tests {
             sent_us: sequence * 10 + 1,
             expires_us: sequence * 10 + 100_000,
             reason: None,
+            playback_sequence: matches!(kind, "speaker_first_write" | "speech_retired")
+                .then_some(1),
+            outcome: (kind == "turn_completed").then(|| "audio_written_unscored".into()),
+            playback_gaps: (kind == "turn_completed").then_some(0),
         }
     }
     #[test]
@@ -1081,5 +1116,62 @@ mod cue_tests {
         let mut regressed_send = cue(4, "speech_retired", 1);
         regressed_send.sent_us = 30;
         assert!(order.accept(&regressed_send, 42).is_err());
+    }
+    #[test]
+    fn each_occurrence_is_matched_and_only_whole_completion_is_terminal() {
+        let mut order = CueOrder::default();
+        for (index, kind) in [
+            "input_admitted",
+            "local_endpoint",
+            "speaker_first_write",
+            "speech_retired",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let c = cue(index as u64 + 1, kind, 1);
+            order.accept(&c, c.sent_us + 1).unwrap();
+        }
+        let mut start = cue(5, "speaker_first_write", 1);
+        start.playback_sequence = Some(2);
+        order.accept(&start, 52).unwrap();
+        // A stale retirement cannot close occurrence two, nor authorize completion.
+        assert!(order.accept(&cue(6, "speech_retired", 1), 62).is_err());
+        assert!(order.owners[&1].playback.active());
+        assert!(order.accept(&cue(6, "turn_completed", 1), 62).is_err());
+        let mut retire = cue(6, "speech_retired", 1);
+        retire.playback_sequence = Some(2);
+        order.accept(&retire, 62).unwrap();
+        // A rejected cue invalidates the physical stream; a fresh order tests clean completion.
+        let mut clean = CueOrder::default();
+        for (index, kind) in [
+            "input_admitted",
+            "local_endpoint",
+            "speaker_first_write",
+            "speech_retired",
+            "speaker_first_write",
+            "speech_retired",
+            "turn_completed",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut c = cue(index as u64 + 1, kind, 1);
+            if index == 4 || index == 5 {
+                c.playback_sequence = Some(2);
+            }
+            clean.accept(&c, c.sent_us + 1).unwrap();
+        }
+        assert!(clean.accept(&cue(8, "cancelled", 1), 82).is_err());
+        assert!(clean.accept(&cue(8, "speaker_first_write", 1), 82).is_err());
+    }
+    #[test]
+    fn legacy_missing_occurrence_live_cue_is_withheld() {
+        let mut order = CueOrder::default();
+        order.accept(&cue(1, "input_admitted", 1), 12).unwrap();
+        order.accept(&cue(2, "local_endpoint", 1), 22).unwrap();
+        let mut old = cue(3, "speaker_first_write", 1);
+        old.playback_sequence = None;
+        assert!(order.accept(&old, 32).is_err());
     }
 }

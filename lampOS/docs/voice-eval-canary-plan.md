@@ -17,7 +17,7 @@ Each `CanaryResult` adds `canonical_plan`:
 
 | Field | Identity |
 |---|---|
-| `suite_version` | Version of the self-test suite contract, currently 1. |
+| `suite_version` | Version of the self-test suite contract, currently 2. |
 | `plan_id`, `plan_version` | Identity and schema version of the embedded plan. |
 | `plan_sha256` | SHA-256 of the exact embedded plan source bytes. |
 | `desk_catalog_sha256` | SHA-256 of the embedded desk catalog source bytes. |
@@ -29,8 +29,11 @@ results. The attempt report's `plan_id` and `plan_sha256` continue to describe
 the run under review, which can differ from `canonical_plan`. Canonical means
 the fixtures embedded in that evaluator build; their hashes make later
 fixture changes visible. Change `suite_version` when changing the suite's
-interpretation or contract. This patch does not change any canary's injected
-failure, detection rule, or trust verdict.
+interpretation or contract. Suite version 2 embeds the new v2 plan: ordinary follow-ups wait for whole-turn
+completion, and scoring distinguishes every playback occurrence from terminal
+completion. The old v1 plan bytes are retained; no historical hash is rewritten.
+The existing canary failures remain, with additional focused occurrence tests
+covering cancellation during or between generations and stale retirement.
 
 `crates/voice-eval/tests/canary_plan.rs` covers valid plans without named
 canary scenarios, a reduced caller catalog/custom profiles/deadline, and the

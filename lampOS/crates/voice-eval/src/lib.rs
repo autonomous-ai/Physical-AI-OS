@@ -19,6 +19,7 @@ pub mod import;
 pub mod ledger;
 pub mod physical;
 pub mod plan;
+mod playback;
 pub mod record;
 pub mod report;
 pub mod runner;

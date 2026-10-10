@@ -9,7 +9,7 @@ use crate::{
     events::{EventKind, to_trace},
     fake::FakeRuntime,
     invalid,
-    plan::LoadedPlan,
+    plan::{FakeContinuation, LoadedPlan},
     stimulus::{SceneTiming, StimulusCatalog},
 };
 use lamp_interaction::BootId;
@@ -39,6 +39,7 @@ pub fn run(arguments: &[String]) -> Result<i32> {
     let mut seed = 1;
     let mut session_override = None;
     let mut cue_fault = None;
+    let mut two_generations = false;
     let mut index = 0;
     while index < arguments.len() && arguments[index].starts_with("--fake-") {
         let value = arguments
@@ -52,10 +53,14 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             "--fake-seed" => seed = value.parse()?,
             "--fake-session-seconds" => session_override = Some(value.parse::<u16>()?),
             "--fake-cue-fault"
-                if matches!(value.as_str(), "drop-retirement" | "stale-retirement") =>
+                if matches!(
+                    value.as_str(),
+                    "drop-retirement" | "stale-retirement" | "drop-completion" | "stale-completion"
+                ) =>
             {
                 cue_fault = Some(value)
             }
+            "--fake-generations" if value == "two" => two_generations = true,
             other => return Err(invalid(&format!("unknown fake option {other}"))),
         }
         index += 2;
@@ -90,6 +95,19 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         .scenario(&scenario.ok_or_else(|| invalid("--fake-scenario required"))?)?
         .clone();
     scenario.session_seconds = session_override.unwrap_or(seconds);
+    if two_generations {
+        let reply = scenario
+            .fake_replies
+            .first_mut()
+            .ok_or_else(|| invalid("two generations require a scripted Gemini reply"))?;
+        reply.continuations = vec![FakeContinuation {
+            delay_ms: 200,
+            text: reply.text.clone(),
+            speech_ms: reply.speech_ms,
+        }];
+        reply.text = "A synthetic first segment.".into();
+        reply.speech_ms = 500;
+    }
     let profile = plan
         .profile(&profile.ok_or_else(|| invalid("--fake-profile required"))?)?
         .clone();
@@ -240,9 +258,14 @@ impl FaultRelay {
                 Err(error) => return Err(error.into()),
             };
             let cue = crate::events::parse_cue(&bytes[..count])?;
-            if !self.used && cue.kind == "speech_retired" {
+            let selected = if self.fault.ends_with("completion") {
+                "turn_completed"
+            } else {
+                "speech_retired"
+            };
+            if !self.used && cue.kind == selected {
                 self.used = true;
-                if self.fault == "stale-retirement" {
+                if self.fault.starts_with("stale-") {
                     self.pending = Some((now_us + 150_000, bytes[..count].to_vec()));
                 }
             } else {

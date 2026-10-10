@@ -82,6 +82,14 @@ provider gap remains, and whether interruption and opening-word retention hold.
 The existing physical run is before-change evidence, not a claim that the fix
 already passed on Lamp.
 
+One Gemini turn may contain several completed audio generations. The
+[playback occurrence correction](playback-occurrences.md) preserves an accepted
+final chunk until its real retirement receipt and then dispatches a later
+generation. The existing PCM capacity and continuous speaker clock remain in
+use. This avoids overwriting the speaker's single final cursor; the local
+retirement-to-next-dispatch interval and any audible boundary gap still need
+measurement on Lamp.
+
 
 ## Native and first physical follow-up
 
