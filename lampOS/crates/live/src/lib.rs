@@ -20,6 +20,7 @@ pub mod physical_privacy;
 mod playback;
 pub mod privacy;
 pub mod process;
+pub(crate) mod provider_flow;
 pub mod provider_worker;
 pub mod reference;
 pub mod ring_wire;

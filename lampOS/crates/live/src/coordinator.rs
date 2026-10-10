@@ -15,6 +15,7 @@ use crate::{
     options::{AudioWorkerOptions, DirectedOptions, NoiseSuppression},
     privacy::PrivacyGate,
     process::{SessionDirectory, Worker, new_boot},
+    provider_flow::{MAX_REPLY_SAMPLES, OutputReceiver, PACKET_SAMPLES},
     provider_worker::{ProviderInput, ProviderOutput},
     ring_wire::{RingBlankReason, RingFeedback},
     transport::{Channel, WorkerChannels},
@@ -44,7 +45,6 @@ const INPUT_READINESS_TIMEOUT: Duration = Duration::from_secs(25);
 const DIAGNOSTIC_SHUTDOWN_GRACE: Duration = Duration::from_millis(750);
 const INPUT_LEASE_US: u64 = 100_000;
 const MAX_TRACE_EVENTS: usize = 20_000;
-const MAX_REPLY_SAMPLES: usize = 24_000 * 30;
 const PROVIDER_PACKETS_PER_SLICE: usize = 2;
 const PROVIDER_SLICE_US: u64 = 2_000;
 
@@ -555,6 +555,7 @@ fn record(trace: &mut Vec<Value>, event: Value) -> Result<()> {
 #[derive(Default)]
 struct StartupEvents {
     provider_ready: bool,
+    output_flow: OutputReceiver,
     events: Vec<Value>,
 }
 impl StartupEvents {
@@ -594,6 +595,7 @@ impl StartupEvents {
             match role {
                 "provider" => match channels.data.receive::<ProviderOutput>()? {
                     Some(ProviderOutput::Ready { setup_us }) if !self.provider_ready => {
+                        self.output_flow.received()?;
                         self.provider_ready = true;
                         self.push(json!({"kind":"provider_ready","at_us":monotonic_us(),"setup_us":setup_us}))?;
                     }
@@ -611,6 +613,9 @@ impl StartupEvents {
                 }
                 _ => return Err(io::Error::other("unexpected startup worker role")),
             }
+        }
+        if role == "provider" {
+            self.output_flow.replenish(0, &mut channels.control)?;
         }
         Ok(())
     }
@@ -799,18 +804,9 @@ fn run_inner(
         .send(Control::ConnectReference {
             peer: rig.capture.boot,
         })?;
-    for event in startup.events {
-        record(trace, event)?;
-    }
     let mut reply = None;
     let result = conversation(
-        &mut rig,
-        &mut owner,
-        seconds,
-        trace,
-        startup.provider_ready,
-        &mut reply,
-        cues,
+        &mut rig, &mut owner, seconds, trace, startup, &mut reply, cues,
     );
     if result.is_err() {
         // Keep an explicit outcome even when the failing child cannot deliver
@@ -831,10 +827,15 @@ fn conversation(
     owner: &mut Controller,
     seconds: u64,
     trace: &mut Vec<Value>,
-    mut provider_ready: bool,
+    startup: StartupEvents,
     reply: &mut Option<Reply>,
     cues: &mut Option<CueSink>,
 ) -> Result<()> {
+    let mut provider_ready = startup.provider_ready;
+    let mut output_flow = startup.output_flow;
+    for event in startup.events {
+        record(trace, event)?;
+    }
     let startup_deadline = Instant::now() + INPUT_READINESS_TIMEOUT;
     let mut deadline = None;
     let mut gate = PrivacyGate::default();
@@ -1013,6 +1014,7 @@ fn conversation(
         while let Some(event) =
             provider_slice.receive(&mut rig.provider.channels.data, monotonic_us())?
         {
+            output_flow.received()?;
             match event {
                 ProviderOutput::Ready { setup_us } => {
                     provider_ready = true;
@@ -1031,7 +1033,7 @@ fn conversation(
                 } => {
                     let received_at_us = monotonic_us();
                     if samples.is_empty()
-                        || samples.len() > 960
+                        || samples.len() > PACKET_SAMPLES
                         || source_frames == 0
                         || source_frames > lamp_gemini::MAX_OUTPUT_SAMPLES
                         || source_offset
@@ -1044,9 +1046,10 @@ fn conversation(
                     }
                     if let Some(current) = reply.as_mut().filter(|r| r.owner.turn() == request) {
                         if current.pcm.len() + samples.len() > MAX_REPLY_SAMPLES {
-                            return Err(
-                                io::Error::other("reply exceeded bounded audio backlog").into()
-                            );
+                            return Err(io::Error::other(
+                                "provider violated reserved reply capacity",
+                            )
+                            .into());
                         }
                         if !current.had_audio {
                             record(
@@ -1383,6 +1386,10 @@ fn conversation(
             &mut speaker_pending,
             &mut speaker_sequence,
             &mut snapshot,
+        )?;
+        output_flow.replenish(
+            reply.as_ref().map_or(0, |current| current.pcm.len()),
+            &mut rig.provider.channels.control,
         )?;
         if let Some(current) = reply.as_mut()
             && current.provider_idle
@@ -2175,6 +2182,106 @@ mod tests {
             source_offset: 0,
             samples,
         }
+    }
+
+    #[test]
+    fn ninety_second_reply_uses_bounded_credit_and_preserves_every_sample() {
+        use crate::provider_flow::OutputSender;
+        let dir = SessionDirectory::create().unwrap();
+        let (mut parent, mut provider) = pair(&dir, "provider");
+        let mut send_flow = OutputSender::default();
+        let mut receive_flow = OutputReceiver::default();
+        let (_, mut reply, _) = active_reply();
+        reply.pcm.clear();
+        let original: Vec<i16> = (0..24_000 * 90 + 73)
+            .map(|index| (index % 32_749) as i16 - 16_000)
+            .collect();
+        let mut source = VecDeque::from([
+            ProviderOutput::Ready { setup_us: 1 },
+            ProviderOutput::Started {
+                request: 1,
+                waiting_for_barrier: false,
+            },
+        ]);
+        source.extend(
+            original
+                .chunks(PACKET_SAMPLES)
+                .enumerate()
+                .map(|(index, samples)| provider_audio(index as u64 + 1, samples.to_vec())),
+        );
+        source.extend([
+            ProviderOutput::Transcript {
+                request: Some(1),
+                text: "done".into(),
+                finished: true,
+            },
+            ProviderOutput::GenerationComplete { request: 1 },
+            ProviderOutput::TurnComplete {
+                request: 1,
+                idle: true,
+            },
+        ]);
+        let packets = source.len();
+        let mut received = 0;
+        let mut played = Vec::new();
+        let mut high_water = 0;
+        let mut credit_waits = 0;
+        let mut final_chunks = 0;
+        for tick in 0..50_000 {
+            while let Some(Control::ProviderOutputCapacity { through }) =
+                provider.control.receive().unwrap()
+            {
+                send_flow.grant(through).unwrap();
+            }
+            for _ in 0..8 {
+                let Some(event) = source.front() else {
+                    break;
+                };
+                if !send_flow.try_send(|| provider.data.send(event)).unwrap() {
+                    credit_waits += 1;
+                    break;
+                }
+                source.pop_front();
+            }
+            let mut slice = ProviderSlice::new(monotonic_us());
+            while let Some(event) = slice.receive(&mut parent.data, monotonic_us()).unwrap() {
+                receive_flow.received().unwrap();
+                received += 1;
+                match event {
+                    ProviderOutput::Audio { samples, .. } => reply.pcm.extend(samples),
+                    ProviderOutput::GenerationComplete { .. } => reply.generation_done = true,
+                    ProviderOutput::TurnComplete { idle, .. } => reply.provider_idle = idle,
+                    _ => {}
+                }
+                high_water = high_water.max(reply.pcm.len());
+                assert!(reply.pcm.len() <= MAX_REPLY_SAMPLES);
+            }
+            // The first second deliberately withholds playback, then the
+            // production 240-frame chunk drains once per virtual 10 ms. This
+            // exercises playback-rate flow control without claiming wall-clock
+            // or acoustic timing from a unit test.
+            if tick >= 500
+                && tick % 5 == 0
+                && let Some((samples, final_chunk)) = reply.next_speaker_chunk()
+            {
+                played.extend(samples);
+                final_chunks += usize::from(final_chunk);
+            }
+            receive_flow
+                .replenish(reply.pcm.len(), &mut parent.control)
+                .unwrap();
+            if reply.provider_idle && reply.pcm.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(received, packets);
+        assert!(source.is_empty());
+        assert!(high_water >= MAX_REPLY_SAMPLES - PACKET_SAMPLES);
+        assert!(credit_waits > 1_000);
+        assert_eq!(final_chunks, 1);
+        assert_eq!(&played[..original.len()], original);
+        assert!(played[original.len()..].iter().all(|sample| *sample == 0));
+        assert_eq!(played.len(), original.len().div_ceil(240) * 240);
     }
 
     #[test]

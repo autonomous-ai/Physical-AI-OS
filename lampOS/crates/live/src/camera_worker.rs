@@ -439,7 +439,7 @@ impl<P: InspectPort, C: Clock> CameraLoop<P, C> {
                     }) if self.capture.fault().is_none() => {}
                     Err(error) => return Err(io::Error::other(error)),
                 },
-                Control::ConnectReference { .. } => {
+                Control::ConnectReference { .. } | Control::ProviderOutputCapacity { .. } => {
                     return Err(io::Error::other(
                         "camera worker rejects audio reference control",
                     ));

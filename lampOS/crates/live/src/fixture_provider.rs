@@ -2,6 +2,7 @@
 //! This supplies PCM, never interaction authority, speaker permits, or a score.
 use crate::{
     options::DirectedOptions,
+    provider_flow::{MAX_REPLY_SAMPLES, OutputSender, PACKET_SAMPLES},
     provider_worker::{ProviderInput, ProviderOutput},
     transport::{Channel, WorkerChannels},
     wire::{Control, WorkerEvent},
@@ -24,8 +25,8 @@ use std::{
 };
 
 const MAX_WAV_BYTES: u64 = 2 * 1024 * 1024;
-pub const MAX_REPLY_FRAMES: usize = 24_000 * 30;
-const PACKET_FRAMES: usize = 960;
+pub const MAX_REPLY_FRAMES: usize = MAX_REPLY_SAMPLES;
+const PACKET_FRAMES: usize = PACKET_SAMPLES;
 const MAX_EVENTS: usize = 8;
 const CONTROL_LEASE_US: u64 = 250_000;
 const CONTROL_SLICE: usize = 16;
@@ -210,6 +211,7 @@ pub struct FixtureProvider {
     highest_seen: u64,
     retired_through: u64,
     output_sequence: u64,
+    output_flow: OutputSender,
     last_control_us: u64,
     last_now_us: u64,
     saw_allowed: bool,
@@ -229,6 +231,7 @@ impl FixtureProvider {
             highest_seen: 0,
             retired_through: 0,
             output_sequence: 0,
+            output_flow: OutputSender::default(),
             last_control_us: now_us,
             last_now_us: now_us,
             saw_allowed: false,
@@ -488,7 +491,9 @@ impl FixtureProvider {
             // is empty, the existing admission/privacy checks remain final.
             self.submit(at, retained.command)?;
         }
-        self.send_one(now(), |event| data.send(event))?;
+        if self.output_flow.can_send() && self.send_one(now(), |event| data.send(event))? {
+            self.output_flow.record_sent()?;
+        }
         Ok(true)
     }
     fn check_retained_input(&self, now_us: u64) -> io::Result<()> {
@@ -516,6 +521,9 @@ impl FixtureProvider {
                     if !self.install(now(), snapshot)? {
                         return Ok(ControlDrain::Stopped);
                     }
+                }
+                Some(Control::ProviderOutputCapacity { through }) => {
+                    self.output_flow.grant(through)?;
                 }
                 Some(Control::StartCapture | Control::ConnectReference { .. }) => {
                     return Err(invalid("invalid fixture provider control"));

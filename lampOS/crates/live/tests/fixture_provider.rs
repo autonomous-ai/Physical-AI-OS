@@ -624,8 +624,22 @@ fn real_fixture_worker_exchanges_exact_pcm_and_stops_without_devices_or_cloud() 
     }
     let deadline = Instant::now() + Duration::from_millis(200);
     let mut pcm = Vec::new();
+    let mut received = 0;
     loop {
-        match worker.channels.data.receive::<ProviderOutput>().unwrap() {
+        let output = worker.channels.data.receive::<ProviderOutput>().unwrap();
+        if output.is_some() {
+            received += 1;
+            // This short fixture has space for every sample. Return two
+            // boot-scoped packet reservations, counting metadata as well.
+            worker
+                .channels
+                .control
+                .send(Control::ProviderOutputCapacity {
+                    through: received + 2,
+                })
+                .unwrap();
+        }
+        match output {
             Some(ProviderOutput::Audio {
                 request, samples, ..
             }) => {

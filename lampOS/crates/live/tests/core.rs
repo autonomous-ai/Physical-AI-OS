@@ -26,6 +26,18 @@ fn empty_control_commands_keep_wire_compatibility_but_reject_unknown_fields() {
         assert!(decode::<Control>(&serde_json::to_vec(&with_extra).unwrap()).is_err());
     }
     assert!(decode::<Control>(br#"{"kind":"stop","kind":"start_capture"}"#).is_err());
+    let capacity = br#"{"kind":"provider_output_capacity","through":2}"#;
+    assert!(matches!(
+        decode::<Control>(capacity).unwrap(),
+        Control::ProviderOutputCapacity { through: 2 }
+    ));
+    for invalid in [
+        br#"{"kind":"provider_output_capacity"}"#.as_slice(),
+        br#"{"kind":"provider_output_capacity","through":-1}"#.as_slice(),
+        br#"{"kind":"provider_output_capacity","through":2,"owner":1}"#.as_slice(),
+    ] {
+        assert!(decode::<Control>(invalid).is_err());
+    }
 }
 
 #[test]

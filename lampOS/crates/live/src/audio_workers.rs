@@ -269,6 +269,9 @@ fn capture_loop(
                     }
                     prepare_requested = true;
                 }
+                Control::ProviderOutputCapacity { .. } => {
+                    return Err(io::Error::other("provider capacity sent to capture").into());
+                }
                 Control::Stop => {
                     microphone.revoke()?;
                     channels.control.send(WorkerEvent::CaptureStopped)?;
@@ -774,8 +777,8 @@ fn speaker_loop(
                     }
                     return Ok(EndReason::Stopped);
                 }
-                Control::StartCapture => {
-                    return Err(io::Error::other("capture command sent to speaker").into());
+                Control::StartCapture | Control::ProviderOutputCapacity { .. } => {
+                    return Err(io::Error::other("invalid speaker command").into());
                 }
             }
         }

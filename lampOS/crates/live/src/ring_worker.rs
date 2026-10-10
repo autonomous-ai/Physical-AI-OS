@@ -188,7 +188,9 @@ fn controls(
                     blanked(link, receipt)?;
                 }
             }
-            Control::StartCapture | Control::ConnectReference { .. } => {
+            Control::StartCapture
+            | Control::ConnectReference { .. }
+            | Control::ProviderOutputCapacity { .. } => {
                 return Err(io::Error::other("invalid ring control command"));
             }
         }

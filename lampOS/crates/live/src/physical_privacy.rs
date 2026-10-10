@@ -27,7 +27,11 @@ pub fn run(mut channels: WorkerChannels) -> Result<(), Box<dyn std::error::Error
             match channels.control.receive()? {
                 Some(Control::Stop) => return Ok(()),
                 Some(Control::Authority { .. }) => last_control = monotonic_us(),
-                Some(Control::StartCapture | Control::ConnectReference { .. }) => {
+                Some(
+                    Control::StartCapture
+                    | Control::ConnectReference { .. }
+                    | Control::ProviderOutputCapacity { .. },
+                ) => {
                     return Err(io::Error::other("invalid privacy worker command").into());
                 }
                 None => break,

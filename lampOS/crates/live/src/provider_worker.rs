@@ -8,6 +8,7 @@
 //! twice. See `docs/gemini-session-reliability.md`.
 use crate::{
     config::ProviderConfig,
+    provider_flow::{OutputSender, PACKET_SAMPLES},
     transport::{Channel, WorkerChannels},
     wire::{Control, WorkerEvent},
 };
@@ -115,6 +116,21 @@ pub enum ProviderOutput {
     },
 }
 
+fn prune_retired_output(output: &mut VecDeque<ProviderOutput>, retired_through: u64) {
+    output.retain(|event| {
+        let request = match event {
+            ProviderOutput::Ready { .. } => None,
+            ProviderOutput::Transcript { request, .. } => *request,
+            ProviderOutput::Started { request, .. }
+            | ProviderOutput::Audio { request, .. }
+            | ProviderOutput::GenerationComplete { request }
+            | ProviderOutput::Interrupted { request }
+            | ProviderOutput::TurnComplete { request, .. } => Some(*request),
+        };
+        request.is_none_or(|request| request > retired_through)
+    });
+}
+
 pub async fn run(channels: WorkerChannels, boot: BootId, config_path: &Path) -> Result<()> {
     let config = ProviderConfig::load(config_path)?
         .into_session()?
@@ -147,6 +163,7 @@ async fn serve<C: Connect>(
                 if control == ControlDrain::Stopped { provider.shutdown(); return Ok(()); }
                 // Local retirement cannot wait behind a full control slice.
                 intake.handoff.synchronize(&provider)?;
+                prune_retired_output(&mut output, intake.handoff.retired_through);
                 if control == ControlDrain::Deferred { continue; }
                 let received = intake.receive_inputs(&mut monotonic_us, &mut || channels.control.receive(), &mut channels.data, &provider, &mut control_budget);
                 match received {
@@ -158,13 +175,13 @@ async fn serve<C: Connect>(
                     Err(error) if !provider.is_connected() => return Err(io::Error::other(format!("provider unavailable while input was admitted: {error}")).into()),
                     Err(error) => return Err(error),
                 }
+                // receive_inputs can observe a newer authority too.
+                prune_retired_output(&mut output, intake.handoff.retired_through);
                 for _ in 0..8 {
                     let Some(front)=output.front() else {break;};
-                    match channels.data.send(front) {
-                        Ok(())=>{output.pop_front();},
-                        Err(error) if error.kind()==io::ErrorKind::WouldBlock=>break,
-                        Err(error)=>return Err(error.into()),
-                    }
+                    if intake.output_flow.try_send(|| channels.data.send(front))? {
+                        output.pop_front();
+                    } else { break; }
                 }
             },
             notice=provider.next(), if output.len() < OUTPUT_HIGH_WATER=>{
@@ -210,7 +227,7 @@ fn forward(
         Event::Audio { lineage, pcm, .. } => {
             let provider_event_at_us = monotonic_us();
             let source_frames = pcm.len();
-            for (index, part) in pcm.chunks(960).enumerate() {
+            for (index, part) in pcm.chunks(PACKET_SAMPLES).enumerate() {
                 *output_sequence = output_sequence
                     .checked_add(1)
                     .ok_or_else(|| io::Error::other("provider output counter exhausted"))?;
@@ -219,7 +236,7 @@ fn forward(
                     sequence: *output_sequence,
                     provider_event_at_us,
                     source_frames,
-                    source_offset: index * 960,
+                    source_offset: index * PACKET_SAMPLES,
                     samples: part.to_vec(),
                 });
             }
@@ -321,6 +338,7 @@ struct RetainedInput {
 struct ProviderIntake {
     guard: BoundaryGuard,
     handoff: InputHandoff,
+    output_flow: OutputSender,
     last_control_us: u64,
     saw_allowed: bool,
     retained: Option<RetainedInput>,
@@ -331,6 +349,7 @@ impl ProviderIntake {
         Self {
             guard: BoundaryGuard::new(boot, MonoTime::from_micros(now_us)),
             handoff: InputHandoff::default(),
+            output_flow: OutputSender::default(),
             last_control_us: now_us,
             saw_allowed: false,
             retained: None,
@@ -408,6 +427,9 @@ impl ProviderIntake {
                         return Ok(ControlDrain::Stopped);
                     }
                     self.saw_allowed |= snapshot.microphone_permission() == Permission::Allowed;
+                }
+                Control::ProviderOutputCapacity { through } => {
+                    self.output_flow.grant(through)?;
                 }
                 Control::StartCapture | Control::ConnectReference { .. } => {
                     return Err(io::Error::other("invalid provider command").into());
@@ -688,6 +710,62 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     const NOW: u64 = 10_000_000;
+
+    #[test]
+    fn output_capacity_cannot_renew_authority_or_controller_heartbeat() {
+        let mut intake = ProviderIntake::new(BootId::new([9; 16]).unwrap(), NOW);
+        let mut budget = CONTROL_SLICE;
+        let mut command = Some(Control::ProviderOutputCapacity { through: 2 });
+        let error = intake
+            .drain_control(
+                &mut || NOW + 250_001,
+                &mut || Ok(command.take()),
+                &mut budget,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("heartbeat expired"));
+        assert_eq!(intake.last_control_us, NOW);
+        assert!(intake.guard.state().is_none());
+        assert!(intake.stopped);
+    }
+
+    #[test]
+    fn retired_output_is_removed_before_new_output_without_changing_survivor_order() {
+        let mut queue = VecDeque::new();
+        for sequence in 0..MAX_QUEUED_OUTPUT - 3 {
+            queue.push_back(ProviderOutput::Audio {
+                request: 1,
+                sequence: sequence as u64 + 1,
+                provider_event_at_us: NOW,
+                source_frames: PACKET_SAMPLES,
+                source_offset: 0,
+                samples: vec![1; PACKET_SAMPLES],
+            });
+        }
+        queue.push_back(ProviderOutput::TurnComplete {
+            request: 1,
+            idle: true,
+        });
+        queue.push_back(ProviderOutput::Started {
+            request: 2,
+            waiting_for_barrier: true,
+        });
+        queue.push_back(ProviderOutput::Transcript {
+            request: None,
+            text: "unattributed".into(),
+            finished: true,
+        });
+        prune_retired_output(&mut queue, 1);
+        assert_eq!(queue.len(), 2);
+        assert!(matches!(
+            queue.pop_front(),
+            Some(ProviderOutput::Started { request: 2, .. })
+        ));
+        assert!(matches!(
+            queue.pop_front(),
+            Some(ProviderOutput::Transcript { request: None, .. })
+        ));
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Call {
@@ -1614,6 +1692,7 @@ mod tests {
     struct LiveRig {
         _directory: crate::process::SessionDirectory,
         parent: WorkerChannels,
+        output_flow: crate::provider_flow::OutputReceiver,
         owner: Controller,
         snapshot: Snapshot,
         dials: UnboundedReceiver<Dial>,
@@ -1640,6 +1719,7 @@ mod tests {
             let mut rig = Self {
                 _directory: directory,
                 parent,
+                output_flow: crate::provider_flow::OutputReceiver::default(),
                 owner,
                 snapshot,
                 dials,
@@ -1679,6 +1759,10 @@ mod tests {
             loop {
                 self.publish();
                 if let Some(output) = self.parent.data.receive::<ProviderOutput>().unwrap() {
+                    self.output_flow.received().unwrap();
+                    self.output_flow
+                        .replenish(0, &mut self.parent.control)
+                        .unwrap();
                     return output;
                 }
                 assert!(!self.worker.is_finished(), "worker ended before output");
@@ -1801,6 +1885,87 @@ mod tests {
     }
     fn idle_complete() -> serde_json::Value {
         json!({"serverContent":{"turnComplete":true,"interactionStatus":"IDLE"}})
+    }
+
+    #[tokio::test]
+    async fn exhausted_output_credit_preserves_input_and_priority_stop() {
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        let request = rig.speak(&mut dial, false, true).await;
+        dial.service
+            .send(provider_audio(5, lamp_gemini::MAX_OUTPUT_SAMPLES))
+            .await;
+        // Consume the two already-reserved packets without returning capacity.
+        // Nothing else may be timestamped/sent while playback has no space.
+        for _ in 0..2 {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                rig.publish();
+                if let Some(output) = rig.parent.data.receive::<ProviderOutput>().unwrap() {
+                    rig.output_flow.received().unwrap();
+                    assert!(
+                        matches!(output, ProviderOutput::Audio { request: current, .. } if current == request)
+                    );
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+        rig.pump(Duration::from_millis(150)).await;
+        assert!(
+            rig.parent
+                .data
+                .receive::<ProviderOutput>()
+                .unwrap()
+                .is_none()
+        );
+        assert!(!rig.worker.is_finished());
+
+        let next = rig
+            .owner
+            .admit(real_time(), AdmittedInput::Interruption)
+            .unwrap();
+        rig.publish();
+        let privacy_generation = rig.snapshot.microphone_generation();
+        rig.parent
+            .data
+            .send(ProviderInput::Start {
+                request: next.turn(),
+                privacy_generation,
+            })
+            .unwrap();
+        rig.parent
+            .data
+            .send(ProviderInput::Audio {
+                request: next.turn(),
+                privacy_generation,
+                sequence: 1,
+                read_completed_at_us: monotonic_us(),
+                samples: vec![9; 160],
+            })
+            .unwrap();
+        // The new microphone activity reaches the scripted service even while
+        // all provider-output credits are exhausted. No old audio is relabelled.
+        let start = rig.service_message(&mut dial).await;
+        assert!(start["realtimeInput"].get("activityStart").is_some());
+        let audio = rig.service_message(&mut dial).await;
+        assert!(audio["realtimeInput"].get("audio").is_some());
+        assert!(
+            rig.parent
+                .data
+                .receive::<ProviderOutput>()
+                .unwrap()
+                .is_none()
+        );
+        rig.parent.control.send(Control::Stop).unwrap();
+        let (result, elapsed) = rig.exit().await;
+        assert!(result.is_ok());
+        println!(
+            "MEASURED stop_during_zero_output_credit_us={} (host control send to worker task end)",
+            elapsed.as_micros()
+        );
+        assert!(elapsed < Duration::from_millis(100));
     }
 
     #[tokio::test]
@@ -2019,8 +2184,8 @@ mod tests {
         let mut dial = rig.ready().await;
         let request = rig.speak(&mut dial, false, true).await;
         // 80 s of speech offered at once: 40 provider messages of 2 s each,
-        // 2,000 IPC packets. This worker forwards at most 8 packets per 2 ms
-        // tick, so its backlog would pass the 512-packet bound that used to
+        // 2,000 IPC packets. The coordinator now grants at most two packets
+        // in flight, so its backlog would pass the 512-packet bound that used to
         // end it. The IPC freshness rule means the coordinator side must keep
         // reading; it does, as fast as packets arrive.
         const MESSAGES: usize = 40;

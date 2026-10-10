@@ -105,7 +105,11 @@ fn probe(mut channels: WorkerChannels) -> Result<()> {
                 last = lamp_ipc::monotonic_us();
                 channels.control.send(WorkerEvent::Ready)?;
             }
-            Some(Control::StartCapture | Control::ConnectReference { .. }) => {
+            Some(
+                Control::StartCapture
+                | Control::ConnectReference { .. }
+                | Control::ProviderOutputCapacity { .. },
+            ) => {
                 return Err(io::Error::other("invalid probe command").into());
             }
             None => {}

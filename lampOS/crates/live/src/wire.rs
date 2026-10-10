@@ -22,9 +22,17 @@ pub struct Envelope<T> {
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Control {
-    Authority { snapshot: Snapshot },
-    ConnectReference { peer: BootId },
+    Authority {
+        snapshot: Snapshot,
+    },
+    ConnectReference {
+        peer: BootId,
+    },
     StartCapture,
+    /// Boot-scoped provider packet capacity, independent of interaction authority.
+    ProviderOutputCapacity {
+        through: u64,
+    },
     Stop,
 }
 
@@ -38,12 +46,16 @@ impl<'de> Deserialize<'de> for Control {
             Authority { snapshot: Snapshot },
             ConnectReference { peer: BootId },
             StartCapture {},
+            ProviderOutputCapacity { through: u64 },
             Stop {},
         }
         Ok(match StrictControl::deserialize(deserializer)? {
             StrictControl::Authority { snapshot } => Self::Authority { snapshot },
             StrictControl::ConnectReference { peer } => Self::ConnectReference { peer },
             StrictControl::StartCapture {} => Self::StartCapture,
+            StrictControl::ProviderOutputCapacity { through } => {
+                Self::ProviderOutputCapacity { through }
+            }
             StrictControl::Stop {} => Self::Stop,
         })
     }
