@@ -10,6 +10,16 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
+- [AEC alignment diagnostics](docs/aec-alignment.md) now record Sonora's cached
+  internal alignment separately from the supplied queue hint, only with explicit
+  audio diagnostics. Replay retains original values and reports its own values
+  separately. This does not change DSP settings or interruption policy. The
+  source audit found no rate/normalization mismatch and no proven acoustic fix;
+  V1's 205 ms default is not a justified replacement for the current hint.
+  Source `173d1793` passed 559 host tests, formatting, strict Clippy and release
+  builds; exact commands, getter overhead and remaining native/device checks
+  are in the linked document. Evidence: `artifacts/aec-alignment-20261010/`.
+
 - Immediate owner priority is complete voice interaction. Codex owns microphone/
   AEC, candidate admission, choreography and integration. The owner requested
   external Claude sessions for Gemini reliability (`crates/gemini/**` and

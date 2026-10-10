@@ -82,6 +82,10 @@ claimed by this audit.
 
 ## Native delay experiment: no default change
 
+The later [pinned-source alignment audit](aec-alignment.md) clarifies that the
+setter seeds startup/reset alignment while the internal estimator controls
+normal AEC3 alignment. This experiment varied hints, not fixed reference offsets.
+
 The five unchanged recorded-mode replays reproduced every PCM sample, VAD score
 and admission prefix exactly on ARM64. Only then did the fixed common-NS-on
 matrix run. It added the same 0 / 80 / 100 / 120 ms to every recorded queue-delay

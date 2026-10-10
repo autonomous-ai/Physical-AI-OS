@@ -22,6 +22,12 @@ tasks and new long-term memory are outside this first release.
 
 ## Current contracts relevant to both sessions
 
+- Opt-in audio diagnostics add optional `aec_internal_alignment_ms`; replay
+  preserves it and emits separate `replayed_internal_alignment_ms` values.
+  This is cached AEC buffer state, not confidence or an admission signal. The
+  microphone/coordinator protocol and provider behavior are unchanged. See
+  [AEC alignment evidence](aec-alignment.md).
+
 - [Input admission](input-admission.md) separates candidates from destructive
   turn replacement. Directed mode still immediately accepts VAD-only activity.
   It has no qualified speaker/echo/addressee classifier and cannot establish

@@ -107,6 +107,9 @@ pub struct CaptureMeta {
     pub delayed_frames: i64,
     pub processing_completed_at_us: u64,
     pub aec_queue_delay_ms: u16,
+    /// Cached internal AEC buffer alignment, not a converged acoustic estimate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aec_internal_alignment_ms: Option<i32>,
     pub reference: ReferenceMeta,
     pub vad_score: f32,
 }

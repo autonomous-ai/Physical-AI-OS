@@ -87,8 +87,11 @@ fn capture_files_preserve_pcm_offsets_hashes_and_full_acknowledgement() {
     pre[0] = i16::MIN;
     pre[159] = 1000;
     let post = [200i16; 160];
+    let mut first = capture(at + 1, 1);
+    first.aec_queue_delay_ms = 18;
+    first.aec_internal_alignment_ms = Some(112);
     assert_eq!(
-        recorder.try_capture(capture(at + 1, 1), &pre, &post),
+        recorder.try_capture(first, &pre, &post),
         SubmitResult::Queued
     );
     assert_eq!(
@@ -122,6 +125,9 @@ fn capture_files_preserve_pcm_offsets_hashes_and_full_acknowledgement() {
     assert_eq!(events[1]["pre_aec_byte_offset"], 0);
     assert_eq!(events[2]["pre_aec_byte_offset"], 320);
     assert_eq!(events[1]["meta"]["vad_score"], serde_json::json!(0.73f32));
+    assert_eq!(events[1]["meta"]["aec_queue_delay_ms"], 18);
+    assert_eq!(events[1]["meta"]["aec_internal_alignment_ms"], 112);
+    assert!(events[2]["meta"].get("aec_internal_alignment_ms").is_none());
     assert!(
         fs::read_to_string(path.join("manifest.pending.json"))
             .unwrap()

@@ -444,6 +444,7 @@ fn capture_loop(
                         delayed_frames: frame.timing.delayed_frames,
                         processing_completed_at_us,
                         aec_queue_delay_ms: delay,
+                        aec_internal_alignment_ms: echo.internal_alignment_ms(),
                         vad_score: probability,
                         reference: diagnostics::ReferenceMeta {
                             playback_epoch: timing.playback_epoch,

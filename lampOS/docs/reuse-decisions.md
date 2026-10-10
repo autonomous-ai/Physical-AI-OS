@@ -57,6 +57,12 @@ The last two rows are documented in the [microphone audit](microphone-v1-v2-audi
 They show why the new runtime also needs criticism: process separation and Rust
 ownership do not themselves solve conversational perception.
 
+The [pinned AEC source audit](aec-alignment.md) found no sample-rate or float
+normalization mismatch. Keep Sonora's existing processing while gathering its
+internal alignment separately from the supplied queue hint. V1's delay default,
+idle bypass and adaptation-preserving buffer reset are different mechanisms;
+copying one constant does not reproduce them or establish better duplex audio.
+
 ## Borrow from current ROS 2
 
 **Lifecycle:** ROS 2 distinguishes configuration, inactivity, activation and

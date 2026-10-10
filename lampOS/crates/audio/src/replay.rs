@@ -105,6 +105,8 @@ struct Capture {
     delayed_frames: i64,
     processing_completed_at_us: u64,
     aec_queue_delay_ms: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    aec_internal_alignment_ms: Option<i32>,
     reference: Reference,
     vad_score: f32,
 }
@@ -965,7 +967,12 @@ fn apply_step(
             segment.ns.extend_from_slice(&ns);
             line(
                 operations,
-                &json!({"kind":"capture_pair","source_record":sequence,"source_pcm_byte_offset":offset,"segment_capture_sample_offset":(segment.frames-1)*160,"meta":meta}),
+                &json!({"kind":"capture_pair","source_record":sequence,"source_pcm_byte_offset":offset,"segment_capture_sample_offset":(segment.frames-1)*160,"meta":meta,
+                    "replayed_internal_alignment_ms": {
+                        "aec_only": segment.aec_processor.internal_alignment_ms(),
+                        "aec_ns": segment.ns_processor.internal_alignment_ms(),
+                    }
+                }),
             )?;
         }
     }

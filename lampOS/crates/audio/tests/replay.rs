@@ -317,6 +317,59 @@ fn certified_partial_writes_reproduce_recorded_call_order_and_exact_ns_pcm() {
     );
 }
 #[test]
+fn replay_preserves_alignment_observations_without_using_them_as_delay_hints() {
+    let mut fixture = Fixture::new();
+    let mut baseline = Vec::new();
+    for recorded in [None, Some(112)] {
+        if let Some(value) = recorded {
+            for row in &mut fixture.capture {
+                if row["kind"] == "capture" {
+                    row["meta"]["aec_internal_alignment_ms"] = json!(value);
+                }
+            }
+            fixture.save();
+        }
+        let name = if recorded.is_none() {
+            "legacy"
+        } else {
+            "observed"
+        };
+        let report = fixture.replay(name, ReplayOptions::default()).unwrap();
+        assert!(report.source_certified && report.replay_complete_for_recorded_capture);
+        assert_eq!(report.segments[0].aec_ns_mismatched_samples_vs_recorded, 0);
+        let operations = fs::read_to_string(fixture.output(name).join("operations.jsonl")).unwrap();
+        let rows: Vec<Value> = operations
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|row| row["kind"] == "capture_pair")
+            .collect();
+        assert_eq!(rows.len(), 3);
+        for row in &rows {
+            assert_eq!(row["meta"]["aec_queue_delay_ms"], 18);
+            assert_eq!(
+                row["meta"].get("aec_internal_alignment_ms").is_some(),
+                recorded.is_some()
+            );
+            assert_eq!(
+                row["meta"]["aec_internal_alignment_ms"].as_i64(),
+                recorded.map(i64::from)
+            );
+        }
+        let observed: Vec<_> = rows
+            .iter()
+            .map(|row| row["replayed_internal_alignment_ms"].clone())
+            .collect();
+        assert!(observed.iter().all(|v| v["aec_ns"].is_number()));
+        assert!(observed.iter().all(|v| v["aec_only"].is_number()));
+        if recorded.is_none() {
+            baseline = observed;
+        } else {
+            assert_eq!(observed, baseline);
+        }
+    }
+}
+
+#[test]
 fn replay_preserves_start_request_bounds_without_inventing_legacy_evidence() {
     for requested in [None, Some(20)] {
         let mut fixture = Fixture::new();

@@ -35,6 +35,31 @@ fn impossible_delay_is_rejected_without_poisoning_next_frame() {
 }
 
 #[test]
+fn alignment_observation_preserves_pcm_and_reset_discards_the_old_value() {
+    for noise_suppression in [false, true] {
+        let mut observed = EchoProcessor::new(noise_suppression);
+        let mut control = EchoProcessor::new(noise_suppression);
+        assert_eq!(observed.internal_alignment_ms(), None);
+        for i in 0..250 {
+            let (render, capture) = synthetic_echo_block(i);
+            observed.render(&render).unwrap();
+            control.render(&render).unwrap();
+            let before = observed.internal_alignment_ms();
+            assert_eq!(observed.internal_alignment_ms(), before);
+            assert_eq!(
+                observed.capture(&capture, 18).unwrap(),
+                control.capture(&capture, 18).unwrap(),
+            );
+            let alignment = observed.internal_alignment_ms();
+            assert!(alignment.is_some());
+            assert_eq!(observed.internal_alignment_ms(), alignment);
+        }
+        observed.reset();
+        assert_eq!(observed.internal_alignment_ms(), None);
+    }
+}
+
+#[test]
 fn reset_forgets_previous_reference_and_matches_a_fresh_processor() {
     let mut processor = EchoProcessor::new(true);
     for i in 0..100 {

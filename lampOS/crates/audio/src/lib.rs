@@ -80,7 +80,9 @@ impl EchoProcessor {
         Ok(())
     }
 
-    /// Delay is measured render/capture device latency, not an assumed network lag.
+    /// The queue-derived delay is a hint, not a forced acoustic alignment.
+    /// Sonora's default AEC3 uses its internal adaptive delay estimator; the
+    /// external hint can seed the render buffer after an internal reset.
     pub fn capture(
         &mut self,
         samples: &CaptureBlock,
@@ -104,6 +106,14 @@ impl EchoProcessor {
             return Err(io::Error::other("AEC returned non-finite audio").into());
         }
         Ok(self.capture_output.map(float_to_pcm))
+    }
+
+    /// Cached AEC render-buffer alignment, in milliseconds. Reading it does not
+    /// run DSP or enable the optional residual-echo detector. `Some` is not
+    /// convergence or echo-free evidence: initial and retained alignment also
+    /// have values. A new/reset processor reports `None` until capture runs.
+    pub fn internal_alignment_ms(&self) -> Option<i32> {
+        self.inner.statistics().delay_ms
     }
 }
 

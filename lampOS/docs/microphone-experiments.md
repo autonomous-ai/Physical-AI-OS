@@ -106,6 +106,12 @@ wall-clock events. Host timestamps and nominal device delay are diagnostic
 evidence, not acoustic speech-end or first-word timestamps. A Mac replay may
 differ numerically from target hardware even with identical sample ordering.
 
+The optional recorded `aec_internal_alignment_ms` is preserved when present;
+older recordings keep it absent. Each `capture_pair` also reports separate
+`replayed_internal_alignment_ms.aec_only` and `.aec_ns` values. These cached
+buffer alignments are observations, not confidence or acoustic delay. They never
+replace the recorded queue hint used for replay. See [AEC alignment evidence](aec-alignment.md).
+
 ## Outputs and interpretation
 
 Every nonempty DSP segment produces four mono 16 kHz PCM16 WAVs:
