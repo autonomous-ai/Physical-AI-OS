@@ -5,6 +5,10 @@ runtime or a running ring process. It adds no animation, filler, idle behavior,
 privacy color or listening cue. Its caller must choose purposeful pixels and
 hold an actual `lamp-interaction` light permit.
 
+`lamp-live` now supplies an optional supervised writer and a phase policy for
+directed qualification. See [conversation/ring ownership](../../docs/ring-choreography.md)
+for its option, bounded scheduling, cancellation and remaining physical checks.
+
 The codec emits exactly 1,028 bytes: 10 low primer bytes, 32 GRB pixels with
 MSB-first bits encoded as `0xC0`/`0xFC`, and 250 low reset bytes. The policy passes
 a validated channel ceiling of 0–120 (for example 40 at night). All channels

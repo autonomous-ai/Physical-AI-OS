@@ -30,7 +30,11 @@ ALSA capture process -> AEC/VAD -> retained speech prefix
                  actual accepted PCM -> AEC reference
 ```
 
-All four workers have separate bounded control and data sockets. The parent
+The four audio/privacy workers have separate bounded control and data sockets.
+An explicit `--ring-channel-ceiling 0..120` adds a fifth, separately supervised
+ring worker. Its local policy follows admitted input, input-end and matched
+playback transitions. See [conversation/ring ownership](ring-choreography.md).
+The parent
 owns conversation and cancellation; cloud work cannot execute in an audio loop.
 Workers target a 2 ms service tick, with 20 ms authority publication and 100 ms
 input leases. The speaker and capture processes also have a direct, private pair
@@ -198,6 +202,12 @@ coordinator drains final control receipts while all children finish; the grace
 is never multiplied by the worker count. This is not a hard guarantee about
 arbitrary OS cleanup.
 
+With the ring enabled, successful shutdown also requires its explicit black
+write after the stop request. Missing, duplicate, future or pre-stop receipts
+fail the run even if the child exits successfully. This confirms write return,
+not optical darkness. A crashed writer still needs exclusive replacement and
+physical recovery qualification.
+
 After a successful local speaker stop and diagnostic reset, privacy closure and
 explicit Stop may send one terminal reference notice over an already-connected
 control socket. Capture shuts down independently and may have closed that socket
@@ -249,6 +259,7 @@ target/release/lamp-live provider-check /absolute/private/provider.json
 target/release/lamp-live directed /absolute/private/provider.json 60 /new/private/run-directory
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/diagnostic-run --diagnostics
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/aec-only-run --diagnostics --noise-suppression off
+target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/ring-run --diagnostics --ring-channel-ceiling 24
 ```
 
 `--noise-suppression on|off` selects a controlled software-processing experiment
@@ -348,7 +359,9 @@ loudspeaker-replay qualification requirement. Ambient
 RMS monitoring can share a suitable speech capture source; a second input must
 justify itself through measured benefit. Echo reference comes from PCM accepted
 by the speaker, not from a second room microphone.
-Camera, environmental sensors, ring and motor choreography, desk calibration,
+Optional ring phase cues now share the directed conversation owner; physical
+light synchronization and visual quality remain unqualified. Camera,
+environmental sensors, motor choreography, desk calibration,
 addressee decisions, natural acknowledgment versus interruption handling,
 recovery, spoken failure paths, and the specified stress/soak tests remain.
 Component and null-device tests do not substitute for those measurements.

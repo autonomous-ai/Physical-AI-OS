@@ -1,0 +1,12 @@
+[package]
+name = "lamp-environment"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+lamp-interaction = { path = "../interaction" }
+
+[lints]
+workspace = true

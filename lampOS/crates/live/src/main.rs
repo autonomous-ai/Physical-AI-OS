@@ -83,11 +83,13 @@ fn run() -> Result<()> {
             match role.as_str() {
                 #[cfg(target_os="linux")]
                 "privacy"=>lamp_live::physical_privacy::run(channels)?,
+                #[cfg(target_os="linux")]
+                "ring"=>lamp_live::ring_worker::run(channels,parent)?,
                 "probe"=>probe(channels)?,
                 _=>return Err(io::Error::other("worker is not integrated yet").into()),
             }
         },
-        _=>return Err(io::Error::new(io::ErrorKind::InvalidInput,"usage: lamp-live camera-inspect PRIVATE_CAMERA_CONFIG.json SECONDS NEW_REPORT.json | provider-check PRIVATE_CONFIG.json | directed PRIVATE_CONFIG.json SECONDS NEW_OUTPUT [--diagnostics] [--noise-suppression on|off] | directed-fixture REPLY.wav SHA256 SECONDS NEW_OUTPUT --diagnostics [--noise-suppression on|off] [--cue-socket ABS_PATH] | worker ROLE DIR CONTROLLER_BOOT WORKER_BOOT").into()),
+        _=>return Err(io::Error::new(io::ErrorKind::InvalidInput,"usage: lamp-live camera-inspect PRIVATE_CAMERA_CONFIG.json SECONDS NEW_REPORT.json | provider-check PRIVATE_CONFIG.json | directed PRIVATE_CONFIG.json SECONDS NEW_OUTPUT [--diagnostics] [--noise-suppression on|off] [--ring-channel-ceiling 0..120] | directed-fixture REPLY.wav SHA256 SECONDS NEW_OUTPUT --diagnostics [--noise-suppression on|off] [--cue-socket ABS_PATH] [--ring-channel-ceiling 0..120] | worker ROLE DIR CONTROLLER_BOOT WORKER_BOOT").into()),
     }
     Ok(())
 }

@@ -1,8 +1,60 @@
 # lampOS handoff to Claude Code
 
-Checkpoint: 2026-10-10. The owner requested a wrap-up to conserve Codex credits,
-no new experiments, and continuation by Claude Code. The broader goal is
-unfinished. This handoff records evidence and limits; it is not release acceptance.
+Original export checkpoint: 2026-10-10, commit
+`64529dee4d1228dd9373298a807d506f94421dca`, pushed to `origin/lamp-v2-chat`.
+The owner initially requested the credit-saving handoff, then resumed the goal.
+The broader goal remains unfinished; this document is not release acceptance.
+
+## Resumed work after export
+
+- Latest owner steering: work without the physical device until they check it
+  in the office tomorrow. Do not continue discovery, SSH, audio or movement
+  experiments while that restriction applies. Local builds/replays continue.
+
+- The owner requested an evidence-based V1/ROS review and reuse of suitable
+  existing technology. See [reuse decisions](docs/reuse-decisions.md).
+- Lamp's previous address is unreachable. The authorized full local-subnet scan
+  found no matching 4ace host key or public identity. Other Lamps were not
+  authenticated or changed. See [discovery result](docs/benchmark-progress.md#resumed-device-discovery-2026-10-10).
+- The newest terminal-shutdown fix still has no physical regression run.
+  No fresh latency/speedup or successful-overlap claim follows from local work.
+- A fresh iMac photo at `2026-10-10T14:51:51Z` was too dark to verify Lamp's
+  presence or placement. Camera access works through the existing app.
+  This is not permission or evidence to move the robot.
+- The new [environmental snapshot contract](docs/environment-snapshots.md)
+  ports V1's useful per-field freshness and source semantics into fixed-size
+  Rust state. It has no driver, bus access or runtime integration. Its 12
+  focused regressions and the full 491-test macOS workspace run passed,
+  with strict workspace/all-target Clippy and formatting. Native ARM64 and
+  installed-sensor qualification remain pending.
+- The private optional-overlap helper is frozen and offline-reviewed at
+  `/private/tmp/lamp-fixture-overlap-v2-7okz9prt`, receipt SHA256
+  `d2d07540f1ab036cd5d2bc37e2ee1ba3f9738bda60360f21d8ce0f3322a3503a`.
+  It reuses the cached topic-change utterance and passed 54 test executions
+  (39 unique tests). It has not run on Lamp. Production audio code, gain
+  and admission thresholds have not changed.
+- The optional [conversation/ring integration](docs/ring-choreography.md) now
+  uses a separate writer and shared Controller ownership. Static phase cues
+  follow admitted input and matched playback, with bounded data/control work,
+  original leases and explicit black-write shutdown evidence. This is local
+  host-qualified work, not deployed or physically qualified; the expressive
+  head/body/camera/sensor experience remains unfinished.
+  Its final source-only macOS run passed 535 tests, strict workspace/all-target
+  Clippy, formatting and the host release build. The separate-process fake-sink
+  probe passed 120 samples (request-to-write p95 3.177 ms, not optical/voice
+  latency). Exact source manifest and receipts are in
+  `artifacts/ring-live-20261010-50cb160b/`. Linux/ARM64 gates are pending because
+  the local VM did not remain running. This source is not covered by the earlier
+  native checkpoint.
+- These resumed changes are local and uncommitted. No new push or deployment
+  occurred. Earlier environmental/helper work is backed up in the export
+  backup's `resumed-20261010/` directory. The later ring slice, full current
+  source and test evidence have their own `resumed-ring-20261010-50cb160b/`
+  directory and manifest. Neither replaces the original export or its receipts.
+
+The sections below preserve the original export's qualification and device
+checkpoint. Later source additions do not retroactively become part of its
+518-test native build or its frozen source identity.
 
 ## Read this first
 
@@ -51,9 +103,9 @@ This is useful progress toward natural interruption, but it does **not** prove
 reliable full-duplex conversation: Lamp can still interpret residual playback as
 a new user turn and interrupt itself.
 
-The newest local fix addresses a separate terminal shutdown race. It has not
-had a physical regression run. No new experiment was started after the owner
-requested this handoff.
+The newest audio fix addresses a separate terminal shutdown race. It has not
+had a physical regression run. After the owner resumed work, the new local
+sensor contract and test-helper checks did not change that audio result.
 
 **There is no accepted V1-main/V2 p50, p95 or speedup.** An early V1 reply measured
 4.39–4.45 s and an early V2 reply 1.945–2.015 s, each n=1 with different Gemini
@@ -69,7 +121,7 @@ See [benchmark progress](docs/benchmark-progress.md).
 | Latest local code | Source `36566770ec2a8531a4a3ea85373ea76237994dd8a62a826ab8b8d474767998e4`; adds the terminal reference-close fix below. |
 | Latest native gates | **518 native ARM64 tests passed**, zero failed/ignored; strict workspace/all-target Clippy, formatting and release build passed. See `artifacts/native-live-terminal-36566770/`. |
 | Latest physical rerun | **Not performed for source 36566770.** The earlier failed NS-on recording remains invalid. |
-| Current working-tree identity | The source snapshot above precedes these handoff/README-only additions. Runtime code must match its manifest; documentation additions do not retroactively change that snapshot's identity. |
+| Exported source identity | The source snapshot above describes the exported audio checkpoint. Resumed environmental-contract additions are separate, host-verified work and are not included in this native qualification. |
 
 Newest frozen qualification:
 `/private/tmp/lampOS-combined-tail-camera-di_at_fy`.
@@ -284,9 +336,18 @@ regression stimulus, not a new generated answer:
 Mac player SHA256:
 `a27a91564621fb4665a07d918db975daf3b01fe6e043fb659e0f8b83af813588`.
 The fixture runner supports `--player` and `--stimulus` for relocated exact assets.
-It currently schedules no second cue. Genuine-overlap testing needs additional
-bounded cue orchestration; do not label the current fixture an interruption test
-with a genuine second speaker.
+The original exported helper schedules no second cue. The separately retained
+optional-overlap revision above supports `--secondary topic-change` with
+`--secondary-delay-ms 0|600|800|1200`. It uses authenticated bounded cues
+from the owned runtime and rejects expired dispatches. Once the new utterance
+starts, ordinary old-answer cancellation must let it finish; pending cues
+are withheld on cancellation. Runtime exit/fault/deadline still stops it.
+There is no dedicated external privacy cue, so it does not claim immediate
+GPIO-to-iMac silence. Actual overlap and audible stopping require room-audio
+scoring. The one-reply fixture does not test a complete second answer.
+Read that helper's README and verify its `ready.json` before use. Do not run
+it until 4ace identity, motor inhibit, device state and restored services
+can be freshly verified. No physical overlap result exists yet.
 
 Primary local evidence directories (ignored by Git but retained on disk):
 
@@ -371,8 +432,9 @@ promoted by the latest NS/delay experiments.
    missed/false interruptions, dropped answers, answer correctness and CPU/RSS.
    Include failures; separate direct-human and speaker-replay results.
 4. Finish actual addressee/multi-person/call/TV restraint and vision evidence.
-   Full camera/ring/sensor/motor choreography is not connected to the directed
-   voice runtime yet. Camera V4L2 backend and finite `camera-inspect` are compiled
+   Ring phase cues are connected as an explicit qualification option, with no
+   physical rerun. Full camera/sensor/motor choreography is not connected to the
+   directed voice runtime yet. Camera V4L2 backend and finite `camera-inspect` are compiled
    but not physically qualified. The motor crate is read-only protocol/calibration
    logic, not a qualified actuator implementation. See component docs before reuse.
 5. Qualify desk onboarding, coordinated gestures/light, privacy/failure recovery

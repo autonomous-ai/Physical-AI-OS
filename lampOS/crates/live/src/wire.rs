@@ -19,7 +19,7 @@ pub struct Envelope<T> {
     pub payload: T,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Control {
     Authority { snapshot: Snapshot },
@@ -28,10 +28,34 @@ pub enum Control {
     Stop,
 }
 
+impl<'de> Deserialize<'de> for Control {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Serde's internally tagged unit variants otherwise accept extra keys.
+        // Empty struct variants enforce the same strict shape as payload variants.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum StrictControl {
+            Authority { snapshot: Snapshot },
+            ConnectReference { peer: BootId },
+            StartCapture {},
+            Stop {},
+        }
+        Ok(match StrictControl::deserialize(deserializer)? {
+            StrictControl::Authority { snapshot } => Self::Authority { snapshot },
+            StrictControl::ConnectReference { peer } => Self::ConnectReference { peer },
+            StrictControl::StartCapture {} => Self::StartCapture,
+            StrictControl::Stop {} => Self::Stop,
+        })
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WorkerEvent {
     Ready,
+    Ring {
+        report: crate::ring_wire::RingFeedback,
+    },
     DiagnosticsStarted {
         started: DiagnosticStarted,
     },

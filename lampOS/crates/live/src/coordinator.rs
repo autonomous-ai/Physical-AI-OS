@@ -1,16 +1,18 @@
 //! Finite, explicitly directed voice qualification on real hardware.
 //!
-//! This first integration does not infer addressees, own the ring or drive motors.
+//! This integration has optional guarded ring cues, but no addressee inference or motors.
 //! Refuse to present its directed-session results as general desk-conversation
 //! qualification. Every worker failure ends the run and retains a failure trace.
 use crate::{
     activity::{Activity, ObservedAudio, TurnDetector},
+    choreography::RingChoreographer,
     diagnostic_control::{self, DiagnosticFinished, DiagnosticStream},
     fixture_provider::{CueSink, Fixture, FixtureInfo, FixtureOptions},
     options::{AudioWorkerOptions, DirectedOptions, NoiseSuppression},
     privacy::PrivacyGate,
     process::{SessionDirectory, Worker, new_boot},
     provider_worker::{ProviderInput, ProviderOutput},
+    ring_wire::{RingBlankReason, RingFeedback},
     transport::{Channel, WorkerChannels},
     wire::{
         Control, MicrophoneFrame, PlaybackDiscardReason, PlaybackGapPhase, SpeakerChunk,
@@ -33,6 +35,9 @@ use std::{
     time::{Duration, Instant},
 };
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub const MAX_DIRECTED_SECONDS: u64 = 600;
+const INPUT_READINESS_TIMEOUT: Duration = Duration::from_secs(25);
+const DIAGNOSTIC_SHUTDOWN_GRACE: Duration = Duration::from_millis(750);
 const INPUT_LEASE_US: u64 = 100_000;
 const MAX_TRACE_EVENTS: usize = 20_000;
 const MAX_REPLY_SAMPLES: usize = 24_000 * 30;
@@ -127,6 +132,8 @@ struct Rig {
     capture: Worker,
     speaker: Worker,
     privacy: Worker,
+    ring: Option<Worker>,
+    ring_channel_ceiling: Option<u16>,
     diagnostic_directory: Option<PathBuf>,
     noise_suppression: NoiseSuppression,
 }
@@ -137,7 +144,10 @@ impl Rig {
             &mut self.capture,
             &mut self.privacy,
             &mut self.provider,
-        ] {
+        ]
+        .into_iter()
+        .chain(self.ring.iter_mut())
+        {
             worker
                 .channels
                 .control
@@ -151,25 +161,32 @@ impl Rig {
             &mut self.capture,
             &mut self.speaker,
             &mut self.privacy,
-        ] {
+        ]
+        .into_iter()
+        .chain(self.ring.iter_mut())
+        {
             worker.check_running()?;
         }
         Ok(())
     }
     fn shutdown(&mut self, trace: &mut Vec<Value>) -> io::Result<()> {
-        let grace = Duration::from_millis(if self.diagnostic_directory.is_some() {
-            750
+        let grace = if self.diagnostic_directory.is_some() {
+            DIAGNOSTIC_SHUTDOWN_GRACE
         } else {
-            300
-        });
+            Duration::from_millis(300)
+        };
         let deadline = Instant::now() + grace;
+        let stop_requested_at_us = monotonic_us();
         // Send urgent stop to every child before waiting on any one child.
         for worker in [
             &mut self.speaker,
             &mut self.capture,
             &mut self.provider,
             &mut self.privacy,
-        ] {
+        ]
+        .into_iter()
+        .chain(self.ring.iter_mut())
+        {
             if let Err(error) = worker.channels.control.send(Control::Stop) {
                 let _ = record(
                     trace,
@@ -179,8 +196,9 @@ impl Rig {
             }
         }
         let mut failure = None;
-        let mut exited = [false; 4];
+        let mut exited = [false, false, false, false, self.ring.is_none()];
         let mut receipts: [Option<DiagnosticFinished>; 2] = [None, None];
+        let mut ring_blank_confirmed = self.ring.is_none();
         let mut final_drain = false;
         loop {
             // Keep the 100 ms control channel fresh while independent diagnostic
@@ -192,6 +210,7 @@ impl Rig {
                 &mut self.privacy,
             ]
             .into_iter()
+            .chain(self.ring.iter_mut())
             .enumerate()
             {
                 for _ in 0..32 {
@@ -201,6 +220,28 @@ impl Rig {
                                 failure =
                                     Some(io::Error::other("duplicate diagnostic finish receipt"));
                             }
+                        }
+                        Ok(Some(WorkerEvent::Ring {
+                            report:
+                                report @ RingFeedback::Blanked {
+                                    reason: RingBlankReason::Shutdown,
+                                    ..
+                                },
+                        })) => {
+                            if index != 4
+                                || ring_blank_confirmed
+                                || !report.confirms_shutdown(stop_requested_at_us, monotonic_us())
+                            {
+                                failure =
+                                    Some(io::Error::other("invalid ring shutdown write receipt"));
+                            } else {
+                                ring_blank_confirmed = true;
+                            }
+                            let _ = record(
+                                trace,
+                                json!({"kind":"ring_shutdown_write","at_us":monotonic_us(),
+                                "details":report,"boundary":"SPI write return; optical darkness unmeasured"}),
+                            );
                         }
                         Ok(Some(event)) => {
                             if matches!(
@@ -265,6 +306,7 @@ impl Rig {
                     &mut self.privacy,
                 ]
                 .into_iter()
+                .chain(self.ring.iter_mut())
                 .enumerate()
                 {
                     if !exited[index] {
@@ -284,6 +326,11 @@ impl Rig {
         }
         // No hardware is active during bounded metadata reads. Native kill/wait
         // has no userspace hard deadline; its result is never hidden as success.
+        if !ring_blank_confirmed {
+            failure = Some(io::Error::other(
+                "ring shutdown has no verified black-write receipt",
+            ));
+        }
         if let Some(directory) = &self.diagnostic_directory {
             for (index, worker, leaf) in [
                 (0, &self.speaker, "render-audio"),
@@ -410,14 +457,18 @@ fn run_source(
     fixture: Option<FixtureInfo>,
     mut cues: Option<CueSink>,
 ) -> Result<()> {
-    if !(1..=600).contains(&seconds) {
+    if !(1..=MAX_DIRECTED_SECONDS).contains(&seconds) {
         return Err(io::Error::other("duration must be 1..600 seconds").into());
+    }
+    if let Some(ceiling) = options.ring_channel_ceiling {
+        lamp_ring::ChannelCeiling::new(ceiling).map_err(io::Error::other)?;
     }
     refuse_legacy_owners()?;
     fs::create_dir(output)?;
     fs::set_permissions(output, fs::Permissions::from_mode(0o700))?;
     let mut trace = Vec::with_capacity(MAX_TRACE_EVENTS);
-    trace.push(json!({"kind":"run_start","at_us":monotonic_us(),"scope":"directed_voice_only","seconds":seconds,"acoustic_score":null,"audio_diagnostics_requested":options.diagnostics,
+    trace.push(json!({"kind":"run_start","at_us":monotonic_us(),"scope":if options.ring_channel_ceiling.is_some(){"directed_voice_with_ring"}else{"directed_voice_only"},"seconds":seconds,"acoustic_score":null,"audio_diagnostics_requested":options.diagnostics,
+        "ring_channel_ceiling_requested":options.ring_channel_ceiling,
         "software_processing_requested":options.noise_suppression.software_processing(),
         "provider_kind":if fixture.is_some(){"one_cached_reply"}else{"gemini"},
         "fixture":fixture,"cue_requested":cues.is_some()}));
@@ -430,7 +481,7 @@ fn run_source(
         seconds,
         &mut trace,
         diagnostic_directory.as_deref(),
-        options.noise_suppression,
+        options,
         &mut cues,
     );
     let end_index = trace.len();
@@ -519,6 +570,14 @@ impl StartupEvents {
                 (WorkerEvent::CaptureDspReset { .. }, "capture") => self.push(
                     json!({"kind":"echo_reference_reset","at_us":monotonic_us(),"details":event}),
                 )?,
+                (
+                    WorkerEvent::Ring {
+                        report: RingFeedback::Blanked { .. },
+                    },
+                    "ring",
+                ) => self.push(
+                    json!({"kind":"ring_startup_event","at_us":monotonic_us(),"details":event}),
+                )?,
                 (WorkerEvent::Fault { code }, _) => return Err(io::Error::other(code.clone())),
                 _ => {
                     return Err(io::Error::other(
@@ -539,7 +598,7 @@ impl StartupEvents {
                     }
                     None => break,
                 },
-                "speaker" => break,
+                "speaker" | "ring" => break,
                 "capture" => {
                     if channels.data.receive::<MicrophoneFrame>()?.is_some() {
                         return Err(io::Error::other("microphone opened before activation"));
@@ -587,7 +646,7 @@ fn spawn_rig(
     owner: &mut Controller,
     startup: &mut StartupEvents,
     diagnostic_directory: Option<&Path>,
-    noise_suppression: NoiseSuppression,
+    options: DirectedOptions,
 ) -> Result<Rig> {
     let executable = std::env::current_exe()?;
     let arguments = source.arguments()?;
@@ -596,7 +655,7 @@ fn spawn_rig(
     let mut last = 0;
     let capture_arguments = AudioWorkerOptions {
         diagnostic_directory: diagnostic_directory.map(|p| p.join("capture-audio")),
-        noise_suppression,
+        noise_suppression: options.noise_suppression,
     }
     .child_arguments("plug:device_micro2", true)?;
     let speaker_arguments = AudioWorkerOptions {
@@ -629,13 +688,41 @@ fn spawn_rig(
             )
         },
     )?;
+    let mut ring = if options.ring_channel_ceiling.is_some() {
+        Some(Worker::spawn_with_tick(
+            &executable,
+            directory,
+            "ring",
+            boot,
+            &[],
+            || {
+                pulse(
+                    owner,
+                    &mut [&mut provider, &mut capture, &mut speaker],
+                    &mut last,
+                    startup,
+                )
+            },
+        )?)
+    } else {
+        None
+    };
     let privacy = Worker::spawn_with_tick(&executable, directory, "privacy", boot, &[], || {
-        pulse(
-            owner,
-            &mut [&mut provider, &mut capture, &mut speaker],
-            &mut last,
-            startup,
-        )
+        if let Some(ring) = ring.as_mut() {
+            pulse(
+                owner,
+                &mut [&mut provider, &mut capture, &mut speaker, ring],
+                &mut last,
+                startup,
+            )
+        } else {
+            pulse(
+                owner,
+                &mut [&mut provider, &mut capture, &mut speaker],
+                &mut last,
+                startup,
+            )
+        }
     })?;
     for (worker, expected_stream) in [
         (&capture, DiagnosticStream::Capture),
@@ -659,8 +746,10 @@ fn spawn_rig(
         capture,
         speaker,
         privacy,
+        ring,
+        ring_channel_ceiling: options.ring_channel_ceiling,
         diagnostic_directory: diagnostic_directory.map(Path::to_path_buf),
-        noise_suppression,
+        noise_suppression: options.noise_suppression,
     })
 }
 
@@ -669,7 +758,7 @@ fn run_inner(
     seconds: u64,
     trace: &mut Vec<Value>,
     diagnostic_directory: Option<&Path>,
-    noise_suppression: NoiseSuppression,
+    options: DirectedOptions,
     cues: &mut Option<CueSink>,
 ) -> Result<()> {
     let directory = SessionDirectory::create()?;
@@ -690,7 +779,7 @@ fn run_inner(
         &mut owner,
         &mut startup,
         diagnostic_directory,
-        noise_suppression,
+        options,
     )?;
     // The trusted supervisor supplies both immutable peer boots. No process
     // learns reference identity from incoming PCM or an unsolicited handshake.
@@ -742,7 +831,7 @@ fn conversation(
     reply: &mut Option<Reply>,
     cues: &mut Option<CueSink>,
 ) -> Result<()> {
-    let startup_deadline = Instant::now() + Duration::from_secs(25);
+    let startup_deadline = Instant::now() + INPUT_READINESS_TIMEOUT;
     let mut deadline = None;
     let mut gate = PrivacyGate::default();
     let mut privacy_sequence = 0;
@@ -752,6 +841,10 @@ fn conversation(
     let mut last_capture = None;
     let mut last_publish = 0;
     let mut last_health = 0;
+    let mut choreography = rig
+        .ring_channel_ceiling
+        .map(RingChoreographer::new)
+        .transpose()?;
     let mut detector = TurnDetector::default();
     let mut provider_queue = VecDeque::with_capacity(64);
     let mut speaker_pending: Option<PendingSpeaker> = None;
@@ -831,6 +924,9 @@ fn conversation(
                         }
                         if current.playback.is_none() {
                             current.playback = Some(owner.playback_started(now(), pending.permit)?);
+                            snapshot = owner.snapshot(now())?;
+                            rig.publish(snapshot)?;
+                            last_publish = monotonic_us();
                             record(
                                 trace,
                                 json!({"kind":"speaker_first_write","turn":turn,"owner":current.owner,"at_us":observed_at_us,"boundary":"ALSA accepted; acoustic onset unmeasured"}),
@@ -861,6 +957,9 @@ fn conversation(
                             io::Error::other("speech retirement has no playback occurrence")
                         })?;
                         owner.playback_ended(now(), token)?;
+                        snapshot = owner.snapshot(now())?;
+                        rig.publish(snapshot)?;
+                        last_publish = monotonic_us();
                         record(
                             trace,
                             json!({"kind":"speech_final_sample_retired","turn":delivered.turn(),"owner":delivered,
@@ -1156,6 +1255,9 @@ fn conversation(
                         audio,
                     )?;
                     owner.input_ended(now(), current.owner)?;
+                    snapshot = owner.snapshot(now())?;
+                    rig.publish(snapshot)?;
+                    last_publish = monotonic_us();
                     provider_queue.push_back(ProviderInput::End {
                         request: current.owner.turn(),
                         privacy_generation: snapshot.microphone_generation(),
@@ -1205,12 +1307,16 @@ fn conversation(
         {
             let turn = current.owner.turn();
             owner.complete_turn(now(), current.owner)?;
+            snapshot = owner.snapshot(now())?;
+            rig.publish(snapshot)?;
+            last_publish = monotonic_us();
             record(
                 trace,
                 json!({"kind":"turn_finished","turn":turn,"at_us":monotonic_us(),"outcome":current.delivery_outcome(),"playback_gaps":current.playback_gaps}),
             )?;
             *reply = None;
         }
+        service_ring(rig.ring.as_mut(), choreography.as_mut(), owner, trace)?;
         if clock.saturating_sub(last_health) >= 50_000 {
             rig.running()?;
             last_health = clock;
@@ -1220,6 +1326,53 @@ fn conversation(
             std::thread::sleep(wait);
         }
     }
+}
+
+/// All hardware I/O remains in the child. This path has one outstanding frame,
+/// bounded nonblocking socket work, and no retry wait that can block capture.
+/// Worker reports are evidence only; they never change conversational ownership.
+fn service_ring(
+    worker: Option<&mut Worker>,
+    choreography: Option<&mut RingChoreographer>,
+    owner: &mut Controller,
+    trace: &mut Vec<Value>,
+) -> Result<()> {
+    let (worker, choreography) = match (worker, choreography) {
+        (None, None) => return Ok(()),
+        (Some(worker), Some(choreography)) => (worker, choreography),
+        _ => return Err(io::Error::other("ring worker and policy configuration disagree").into()),
+    };
+    for _ in 0..16 {
+        match worker.channels.control.receive::<WorkerEvent>()? {
+            Some(WorkerEvent::Ring { report }) => {
+                let current = owner.snapshot(now())?;
+                choreography.feedback(&report, current, now())?;
+                record(
+                    trace,
+                    json!({"kind":"ring_feedback","at_us":monotonic_us(),"details":report,
+                    "boundary":"SPI write return; optical output unmeasured"}),
+                )?;
+            }
+            Some(WorkerEvent::Fault { code }) => return Err(io::Error::other(code).into()),
+            Some(_) => return Err(io::Error::other("unexpected ring worker event").into()),
+            None => break,
+        }
+    }
+    if let Some(frame) = choreography.prepare(owner, now())? {
+        // The data frame can never install authority or extend its own lease.
+        // The worker rereads this priority path after receiving the data frame.
+        worker.channels.control.send(Control::Authority {
+            snapshot: frame.snapshot,
+        })?;
+        worker.channels.data.send(frame)?;
+        record(
+            trace,
+            json!({"kind":"ring_requested","at_us":frame.requested_at_us,
+            "owner":frame.permit.owner(),"phase":frame.phase,"ceiling":frame.ceiling,
+            "permit_expires_at_us":frame.permit.expires_at().as_micros()}),
+        )?;
+    }
+    Ok(())
 }
 
 /// Called only after this tick's retained input and cancellation work. Keeping
@@ -1587,24 +1740,100 @@ mod tests {
     use lamp_interaction::BoundaryGuard;
 
     #[test]
+    fn ring_lifetime_includes_startup_and_shutdown_around_maximum_active_session() {
+        let required = Duration::from_secs(MAX_DIRECTED_SECONDS)
+            + crate::process::WORKER_STARTUP_TIMEOUT
+            + INPUT_READINESS_TIMEOUT
+            + DIAGNOSTIC_SHUTDOWN_GRACE;
+        assert!(required < Duration::from_micros(crate::ring_worker::MAX_RUNTIME_US));
+    }
+
+    #[test]
+    fn ring_service_orders_authority_and_preserves_successor_on_late_feedback() {
+        use crate::ring_wire::{RingFrame, RingPhase};
+
+        let directory = SessionDirectory::create().unwrap();
+        let (mut worker, mut peer) = Worker::sleeping_fixture(&directory.path, "ring");
+        let mut owner = Controller::new(new_boot().unwrap(), now());
+        let at = now();
+        let until = at.checked_add(INPUT_LEASE_US).unwrap();
+        owner
+            .set_microphone_permission(at, Permission::Allowed)
+            .unwrap();
+        owner
+            .set_capture(at, CaptureState::RetainingUntil(until))
+            .unwrap();
+        owner
+            .set_admission(at, AdmissionState::OpenUntil(until))
+            .unwrap();
+        let previous = owner.admit(at, AdmittedInput::NewTurn).unwrap();
+        let mut policy = RingChoreographer::new(24).unwrap();
+        let mut trace = Vec::new();
+
+        service_ring(Some(&mut worker), Some(&mut policy), &mut owner, &mut trace).unwrap();
+        let frame = peer.data.receive::<RingFrame>().unwrap().unwrap();
+        assert_eq!(frame.permit.owner(), previous);
+        assert!(matches!(peer.control.receive::<Control>().unwrap(),
+            Some(Control::Authority { snapshot }) if snapshot == frame.snapshot));
+        let written_at_us = monotonic_us();
+        let successor = owner.admit(now(), AdmittedInput::NewTurn).unwrap();
+        peer.control
+            .send(WorkerEvent::Ring {
+                report: RingFeedback::Presented {
+                    owner: previous,
+                    phase: frame.phase,
+                    requested_at_us: frame.requested_at_us,
+                    write_started_at_us: written_at_us,
+                    write_finished_at_us: written_at_us,
+                },
+            })
+            .unwrap();
+
+        service_ring(Some(&mut worker), Some(&mut policy), &mut owner, &mut trace).unwrap();
+        assert_eq!(owner.snapshot(now()).unwrap().owner(), Some(successor));
+        let next = peer.data.receive::<RingFrame>().unwrap().unwrap();
+        assert_eq!(next.permit.owner(), successor);
+        assert_eq!(next.phase, RingPhase::Listening);
+        assert!(matches!(peer.control.receive::<Control>().unwrap(),
+            Some(Control::Authority { snapshot }) if snapshot == next.snapshot));
+        assert_eq!(
+            trace
+                .iter()
+                .filter(|event| event["kind"] == "ring_requested")
+                .count(),
+            2
+        );
+        assert_eq!(
+            trace
+                .iter()
+                .filter(|event| event["kind"] == "ring_feedback")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn diagnostic_shutdown_uses_one_deadline_and_reaps_every_hung_worker() {
         let directory = SessionDirectory::create().unwrap();
         let (speaker, _speaker_peer) = Worker::sleeping_fixture(&directory.path, "speaker");
         let (capture, _capture_peer) = Worker::sleeping_fixture(&directory.path, "capture");
         let (provider, _provider_peer) = Worker::sleeping_fixture(&directory.path, "provider");
         let (privacy, _privacy_peer) = Worker::sleeping_fixture(&directory.path, "privacy");
+        let (ring, _ring_peer) = Worker::sleeping_fixture(&directory.path, "ring");
         let mut rig = Rig {
             speaker,
             capture,
             provider,
             privacy,
+            ring: Some(ring),
+            ring_channel_ceiling: Some(24),
             diagnostic_directory: Some(directory.path.clone()),
             noise_suppression: NoiseSuppression::On,
         };
         let started = Instant::now();
         let mut trace = Vec::new();
         assert!(rig.shutdown(&mut trace).is_err());
-        // A four-times-750 ms serial grace would fail this generous regression
+        // A five-times-750 ms serial grace would fail this generous regression
         // bound. It is a test observation, not a kernel kill/wait deadline.
         assert!(started.elapsed() < Duration::from_millis(2500));
         for worker in [
@@ -1612,7 +1841,10 @@ mod tests {
             &mut rig.capture,
             &mut rig.provider,
             &mut rig.privacy,
-        ] {
+        ]
+        .into_iter()
+        .chain(rig.ring.iter_mut())
+        {
             assert!(worker.try_exit().unwrap().is_some());
         }
         assert_eq!(

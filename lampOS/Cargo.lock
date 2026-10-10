@@ -662,6 +662,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lamp-environment"
+version = "0.1.0"
+dependencies = [
+ "lamp-interaction",
+]
+
+[[package]]
 name = "lamp-gemini"
 version = "0.1.0"
 dependencies = [
@@ -702,6 +709,7 @@ dependencies = [
  "lamp-gemini",
  "lamp-interaction",
  "lamp-ipc",
+ "lamp-ring",
  "rtrb",
  "rustix",
  "serde",

@@ -12,6 +12,11 @@ Treat this directory as the root of a standalone repository. Follow the
 - Reuse tested protocol semantics, calibration data, safety rules and regression
   fixtures. Do not copy the old callback ownership or shared execution model.
   Confirm units and behavior on actual hardware before accepting a port.
+- Before designing a new subsystem, inspect the corresponding V1 behavior and
+  current maintained alternatives. Record keep/change/reuse decisions and their
+  evidence in [reuse decisions](docs/reuse-decisions.md). Reuse suitable Rust
+  libraries; rewriting runtime policy does not require reimplementing every
+  dependency. Compare failure behavior and measured workloads before replacement.
 - Keep capture and interruption independent of cloud, vision inference and
   presentation. Bound queues, buffers, worker counts and retry work.
 - One interaction owner coordinates voice, head, body and ring. Validate

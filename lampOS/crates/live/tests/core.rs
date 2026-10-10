@@ -2,7 +2,7 @@ use lamp_interaction::{BootId, MonoTime};
 use lamp_live::{
     activity::{Activity, ObservedAudio, TurnDetector},
     privacy::PrivacyGate,
-    wire::{Envelope, ReceiveOrder, decode},
+    wire::{Control, Envelope, ReceiveOrder, decode, encode},
 };
 
 fn time(t: u64) -> MonoTime {
@@ -14,6 +14,18 @@ fn audio(sequence: u64) -> ObservedAudio {
         captured_at_us: sequence * 10_000,
         samples: [sequence as i16; 160],
     }
+}
+
+#[test]
+fn empty_control_commands_keep_wire_compatibility_but_reject_unknown_fields() {
+    for command in [Control::Stop, Control::StartCapture] {
+        let valid = encode(&command).unwrap();
+        assert_eq!(encode(&decode::<Control>(&valid).unwrap()).unwrap(), valid);
+        let mut with_extra: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+        with_extra["unexpected"] = true.into();
+        assert!(decode::<Control>(&serde_json::to_vec(&with_extra).unwrap()).is_err());
+    }
+    assert!(decode::<Control>(br#"{"kind":"stop","kind":"start_capture"}"#).is_err());
 }
 
 #[test]

@@ -29,6 +29,47 @@ remain documented in [live runtime](live-runtime.md) and their private evidence.
 It is not a success-rate denominator. No failed attempt is discarded to make a
 latency percentile look better.
 
+## Resumed device discovery, 2026-10-10
+
+The terminal-shutdown candidate still needs its first physical rerun. The old
+`172.168.20.159` address timed out. At the owner's request, a bounded scan covered
+`172.168.20.0/23` (510 usable addresses; TCP 22/80/5001/8080), checked reachable
+SSH host keys against the saved 4ace key, read public setup identities and tried
+local discovery. No matching 4ace identity was found. The other identified Lamps
+were `lamp-52e6` at `.190` and `lamp-a0ae` at `.197`; neither was authenticated or
+changed. This does not establish whether 4ace is powered off, disconnected or
+otherwise unreachable. No new physical experiment or latency result followed.
+See local `artifacts/network-rediscovery-20261010/result.json`.
+
+At the owner's request, the existing iMac camera app captured a fresh
+1920×1080 still at `2026-10-10T14:51:51Z`, after three seconds of exposure
+settling. The room was too dark to reliably confirm Lamp's presence, power
+or safe clearance. No movement was requested. The original photo and
+capture receipt are private local evidence, not a usable placement check:
+`artifacts/presence-photo-20261010/`. Launching the existing app via macOS
+`open` worked with its established permission; direct execution returned
+a camera-permission error. No privacy permissions were changed.
+
+The owner then directed continued work without the physical device until their
+next office check. The optional ring choreography passed 535 host workspace
+tests and a finite separate-process memory-sink probe; see
+[its qualification boundaries](ring-choreography.md#host-qualification-2026-10-10).
+It has no new Linux/ARM64 or physical result and does not change the audio
+benchmark table above. No additional discovery, SSH or device test was made.
+
+## Owner-requested connectivity recheck, 2026-10-10 15:43 UTC
+
+A fresh read-only check still found no open port at `172.168.20.159`. The
+bounded scan covered 509 other usable addresses on `172.168.20.0/23`
+(excluding the iMac) on TCP 22/80/5001/8080, and compared reachable SSH keys
+against the saved 4ace identity. No key matched. Public setup identities still
+showed `lamp-52e6` at `.190` and `lamp-a0ae` at `.197`, plus a non-Lamp device;
+none identified 4ace. The scan took 20.43 seconds. This does not establish
+power state or explain the loss of connectivity. No SSH login or device change
+was performed. This check was specifically requested after the owner deferred
+physical work; local implementation/testing continues. Evidence:
+`artifacts/connectivity-recheck-20261010-154339/`.
+
 ## Latest defect and evidence
 
 The earlier speech-gap trial used source

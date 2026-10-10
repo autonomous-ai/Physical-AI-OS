@@ -15,6 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
+
 pub fn new_boot() -> io::Result<BootId> {
     let mut bytes = [0u8; 16];
     fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
@@ -133,7 +135,7 @@ impl Worker {
             role: role.into(),
             diagnostic_start: None,
         };
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + WORKER_STARTUP_TIMEOUT;
         let peer_c = directory.join(format!("{role}.c.w"));
         let peer_d = directory.join(format!("{role}.d.w"));
         // Startup waits run before listening readiness is advertised. A later

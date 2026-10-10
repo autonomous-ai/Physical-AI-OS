@@ -7,6 +7,7 @@ pub mod activity;
 pub mod camera_config;
 pub mod camera_inspect;
 pub mod camera_worker;
+pub mod choreography;
 pub mod config;
 pub mod diagnostic_control;
 pub mod diagnostics;
@@ -20,6 +21,8 @@ pub mod privacy;
 pub mod process;
 pub mod provider_worker;
 pub mod reference;
+pub mod ring_wire;
+pub mod ring_worker;
 pub mod transport;
 pub mod wire;
 

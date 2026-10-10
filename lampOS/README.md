@@ -12,8 +12,8 @@ runtime remains the rollback; full choreography, sensors and social
 interaction qualification remain.**
 
 Read the [Claude Code handoff](HANDOFF.md) for the exact source, device,
-evidence, reusable test assets and unfinished work. Codex is pausing at the
-owner's request to conserve credits.
+evidence, reusable test assets and unfinished work. Work resumed after the
+export; Lamp-4ace is currently unreachable, so physical validation is on hold.
 
 See [benchmark progress](docs/benchmark-progress.md) for the retained trials and current blockers.
 
@@ -23,6 +23,8 @@ All code comments, documentation and notes are English. Read the
 [project rules](AGENTS.md), [release scope](docs/architecture.md), and
 [hardware port contract](docs/hardware-contract.md), and
 [V1-main versus V2 comparison protocol](docs/comparison-protocol.md).
+The [reuse decisions](docs/reuse-decisions.md) record what we preserve from V1,
+what we borrow from ROS 2 and which existing Rust projects need evaluation.
 
 Startup, configuration, supervision, hardware control and interaction logic
 belong here in Rust. Keep dependency declarations, model asset management,
@@ -58,13 +60,17 @@ cargo fmt --all -- --check
 | `lamp-ring` | Fixed-size WS2812 encoding, bounded brightness and ownership-checked Linux SPI writes. |
 | `lamp-camera` | Bounded frame lifecycle, privacy, latest-frame delivery and Linux V4L2 backend; native-qualified code, physical camera qualification pending. |
 | `lamp-motor` | Read-only five-servo protocol, bounded status parsing and per-unit calibration math; no bus access or movement yet. |
+| `lamp-environment` | Typed latest sensor values, per-field freshness, partial readiness, faults and worker identity; I/O-free contract, drivers/integration pending. |
 | `lamp-acoustic` | Fixed desk scenarios, cached voices/noise mixes and asset integrity checks. |
 | `lamp-gemini` | Bounded Gemini Live WebSocket transport, explicit activity, immutable response ownership and cancellation barriers. |
-| `lamp-live` | Finite directed qualification with separate capture, speaker, physical privacy and provider processes. |
+| `lamp-live` | Finite directed qualification with separate capture, speaker, physical privacy and provider processes; optional supervised ring cues share conversation ownership. |
 | `lamp-observer` | Mac room recording and native microphone permission preflight; explicit cached iMac-speaker playback with delivery/failure evidence. |
 
 See the [directed runtime](docs/live-runtime.md),
-[room observer](docs/room-observer.md), [motor contract](docs/motor-runtime.md), and [native component qualification](docs/component-qualification.md) for
+[conversation/ring ownership](docs/ring-choreography.md),
+[room observer](docs/room-observer.md), [motor contract](docs/motor-runtime.md),
+[environmental snapshots](docs/environment-snapshots.md), and
+[native component qualification](docs/component-qualification.md) for
 frozen-source checks and measurements. Component tests do not establish
 end-to-end conversation, acoustic latency,
 addressee accuracy, physical privacy controls or motor safety.

@@ -8,6 +8,17 @@ playback-reference starvation during speech gaps. There is no validated speedup,
 p50/p95, or repeated-turn reliability. V2 has not replaced HAL. Full camera,
 sensor, motor and social interaction integration remains.**
 
+The [environmental snapshot component](environment-snapshots.md) now provides
+typed units, fixed-size latest state and per-field freshness/fault handling.
+It does not acquire sensors or establish that any sensor is installed. The
+resumed source has host verification only; the earlier 518-test native
+checkpoint does not qualify this new component.
+
+The [first connected choreography slice](ring-choreography.md) adds an optional
+supervised ring worker driven by actual admitted-input and playback transitions.
+It has host verification only. The prototype's static phase cues are not a
+finished character performance or a physical synchronization measurement.
+
 See [benchmark progress](benchmark-progress.md) for the retained trials and current blockers.
 Source home: [top-level lampOS/](../README.md).
 
@@ -17,6 +28,16 @@ Source home: [top-level lampOS/](../README.md).
 right of a desk, beside one person using a computer. Speech, listening, head,
 body and ring form one coherent interaction. Stillness and silence are valid.
 A colleague, a call and computer audio are part of this desk environment.
+
+The product goal is a believable, attentive character the owner can talk with
+throughout the day. Judge whole interactions: noticing an addressed question,
+listening through a hesitation, answering, yielding to a topic change and
+settling again. Voice, light, head and body should express the same intention
+with purposeful timing and variation. Do not turn each state transition into
+a mandatory gesture. Camera, microphones and sensors supply evidence with
+freshness and uncertainty, not invented awareness. Software tests establish
+contracts; observation of the physical performance and the owner's judgment
+establish whether the result feels natural.
 
 The first version includes:
 
@@ -38,6 +59,10 @@ of the interaction itself. The model must not claim to have run an excluded task
 No autonomous room search, stock spoken waiting fillers or random idle movements.
 
 ## Rust and reuse
+
+The [V1 / ROS 2 reuse decisions](reuse-decisions.md) identify useful contracts,
+legacy hazards and existing Rust candidates. Read that evidence before building
+a new subsystem; source inspection and upstream benchmarks are not Lamp results.
 
 All Lamp-owned runtime code lives in top-level `lampOS/` and will be Rust:
 audio capture/playback coordination, provider transport, conversation control,
@@ -96,8 +121,8 @@ ring output, physical controls and each enabled environmental sensor in their
 own supervised processes, with explicit bounded communication. The five servos
 share one motor process because they share a serialized bus. Keep one writer
 for that bus and coordinate head/body motion there. The directed runtime now implements separate capture, speaker, physical privacy
-and provider processes. Camera, sensor, ring and motor processes are not yet
-integrated into that runtime. The earlier IPC measurement used separate test
+and provider processes, plus an optional ring process. Camera, sensor and motor
+processes are not yet integrated into that runtime. The earlier IPC measurement used separate test
 processes; it is not a measurement of these hardware workers.
 
 Code enforces privacy, output ownership, expiry, cancellation, readiness and
@@ -152,7 +177,7 @@ The `lamp-acoustic` crate contains a versioned catalog of 20 desk scenarios and
 24 reusable utterances. Ownership, transport and audio processing now have Rust
 implementations as described below. Gemini transport and a directed voice process
 integration are described in [live runtime](live-runtime.md). This slice has no
-addressee classifier, camera, motors or ring integration; it does not qualify the
+addressee classifier, camera or motor integration; its optional ring cues do not qualify the
 complete desk experience. Native checks run in an isolated build directory on
 Lamp; installed HAL services have not been replaced.
 
@@ -255,5 +280,7 @@ settings and rejects short writes. Its 10 ms write budget is measured when the
 syscall returns, not a hard timeout. A supervised worker must service control
 and call its expiry tick at least every 10 ms. Cooperative file locking does
 not exclude legacy HAL or boot/shutdown services; cutover must ensure one writer.
-Tests cover codec, cancellation and fault paths. Physical light timing and
-brightness remain unmeasured.
+`lamp-live` now supplies that supervised worker and a bounded phase policy;
+its cooperative tick is 2 ms. Tests cover codec, cancellation, cross-channel
+ordering, stale feedback and fault paths. Physical light timing and brightness
+remain unmeasured. See [ring choreography](ring-choreography.md).

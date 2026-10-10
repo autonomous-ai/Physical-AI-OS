@@ -234,9 +234,14 @@ not an exact write-to-render-epoch binding. Use accepted render diagnostics for
 that association. `speaker_first_write` means the normal speaker accepted PCM,
 not that its first word was already audible.
 
-The external harness must match session and original turn, enforce ordered and
-fresh cues, and withhold/cancel a secondary stimulus on cancellation, missing
-cue, expiry, sequence ambiguity, or cue invalidation. Cross-host clocks require
+The external harness must match session and original turn and enforce ordered,
+fresh cues. While the secondary stimulus is pending, cancellation or retirement
+of the original reply must withhold it. Once the secondary has started, ordinary
+cancellation of the old reply must preserve the new utterance: that cancellation
+is the intended interruption result. Runtime termination, cue faults and bounded
+player deadlines still stop external playback. There is no privacy-specific cue
+in this contract, so the external Mac helper cannot claim immediate GPIO-to-Mac
+stop; device audio privacy remains enforced locally. Cross-host clocks require
 an explicit correlation and transport-age bound; copying Lamp's monotonic number
 into a Mac schedule does not establish freshness or an acoustic offset. The
 runtime's expiry check protects event-to-send age, not an arbitrarily delayed

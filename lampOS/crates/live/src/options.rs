@@ -59,6 +59,8 @@ pub struct SoftwareProcessing {
 pub struct DirectedOptions {
     pub diagnostics: bool,
     pub noise_suppression: NoiseSuppression,
+    /// Explicit qualification opt-in. None leaves the ring device unopened.
+    pub ring_channel_ceiling: Option<u16>,
 }
 impl DirectedOptions {
     pub fn parse(arguments: &[String]) -> io::Result<Self> {
@@ -71,6 +73,13 @@ impl DirectedOptions {
                 "--noise-suppression" if !noise_seen => {
                     options.noise_suppression = required_value(&mut arguments)?.parse()?;
                     noise_seen = true;
+                }
+                "--ring-channel-ceiling" if options.ring_channel_ceiling.is_none() => {
+                    let value = required_value(&mut arguments)?
+                        .parse::<u16>()
+                        .map_err(|_| invalid_options())?;
+                    lamp_ring::ChannelCeiling::new(value).map_err(io::Error::other)?;
+                    options.ring_channel_ceiling = Some(value);
                 }
                 _ => return Err(invalid_options()),
             }
@@ -162,10 +171,42 @@ mod tests {
         assert_eq!(options, DirectedOptions::default());
         assert!(options.noise_suppression.enabled());
         assert!(!options.diagnostics);
+        assert_eq!(options.ring_channel_ceiling, None);
         assert_eq!(
             serde_json::to_value(options.noise_suppression.software_processing()).unwrap(),
             serde_json::json!({"aec":"sonora_aec3","noise_suppression":true})
         );
+    }
+    #[test]
+    fn ring_is_explicit_bounded_and_independent_of_audio_treatment() {
+        for ceiling in [0, 24, 120] {
+            let options = DirectedOptions::parse(&args(&[
+                "--ring-channel-ceiling",
+                &ceiling.to_string(),
+                "--noise-suppression",
+                "off",
+                "--diagnostics",
+            ]))
+            .unwrap();
+            assert_eq!(options.ring_channel_ceiling, Some(ceiling));
+            assert_eq!(options.noise_suppression, NoiseSuppression::Off);
+            assert!(options.diagnostics);
+        }
+        for flags in [
+            vec!["--ring-channel-ceiling"],
+            vec!["--ring-channel-ceiling", "121"],
+            vec!["--ring-channel-ceiling", "65536"],
+            vec!["--ring-channel-ceiling", "-1"],
+            vec![
+                "--ring-channel-ceiling",
+                "24",
+                "--ring-channel-ceiling",
+                "24",
+            ],
+            vec!["--ring-channel-ceiling", "--diagnostics"],
+        ] {
+            assert!(DirectedOptions::parse(&args(&flags)).is_err());
+        }
     }
     #[test]
     fn both_modes_are_orthogonal_to_diagnostics_in_either_order() {
@@ -178,7 +219,8 @@ mod tests {
                     DirectedOptions::parse(&args(&flags)).unwrap(),
                     DirectedOptions {
                         diagnostics: true,
-                        noise_suppression: mode
+                        noise_suppression: mode,
+                        ring_channel_ceiling: None,
                     }
                 );
             }
