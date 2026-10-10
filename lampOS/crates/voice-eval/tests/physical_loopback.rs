@@ -89,6 +89,7 @@ fn run(
         seed: 3,
         shuffle: false,
         attempt_seed: None,
+        self_test: serde_json::Value::Null,
     };
     let mut records = run_suite(&plan, &catalog, &mut backend, &options, &run).unwrap();
     let record = records.remove(0);
@@ -268,6 +269,7 @@ fn undelivered_stimuli_are_withheld_not_scored_as_silence() {
         seed: 3,
         shuffle: false,
         attempt_seed: None,
+        self_test: serde_json::Value::Null,
     };
     let record = run_suite(&plan, &catalog, &mut backend, &options, &run)
         .unwrap()
@@ -321,6 +323,7 @@ fn a_transport_that_closes_mid_trace_invalidates_the_attempt() {
         seed: 3,
         shuffle: false,
         attempt_seed: None,
+        self_test: serde_json::Value::Null,
     };
     let record = run_suite(&plan, &catalog, &mut backend, &options, &run)
         .unwrap()

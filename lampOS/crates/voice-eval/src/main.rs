@@ -1,6 +1,7 @@
 use lamp_voice_eval::{
     Result,
     annotations::{self, Annotations},
+    canary::{self, CanaryResult},
     evaluate::{self, AttemptScore},
     fake::FakeBackend,
     import::{ImportOptions, import_trace},
@@ -26,7 +27,7 @@ use std::{
 };
 
 const USAGE: &str = "usage:
-  lamp-voice-eval list | validate [--plan FILE]
+  lamp-voice-eval list | validate | self-test [--plan FILE]
   lamp-voice-eval fake-run --out NEW_DIR [--profile ID] [--scenario ID]... [--repetitions N]
       [--seed N] [--no-shuffle] [--attempt-seed N] [--cache DIR --manifest FILE...] [--plan FILE]
   lamp-voice-eval evaluate RUN_DIR [--annotations FILE] [--plan FILE]
@@ -116,6 +117,7 @@ fn suite_options(args: &mut Args, run_id: String) -> Result<SuiteOptions> {
         repetitions: args.take("--repetitions")?.map_or(Ok(1), |v| v.parse())?,
         seed: args.take("--seed")?.map_or(Ok(1), |v| v.parse())?,
         shuffle: !args.take_flag("--no-shuffle"),
+        self_test: Value::Null,
         attempt_seed: args
             .take("--attempt-seed")?
             .map(|v| v.parse())
@@ -223,6 +225,9 @@ fn run() -> Result<i32> {
             let assets = assets(&mut args, &catalog)?;
             args.done()?;
             let profile = plan.profile(&profile_id)?.clone();
+            let self_test = canary::run(&plan, &catalog)?;
+            let mut options = options;
+            options.self_test = serde_json::to_value(&self_test)?;
             create_run_directory(&out)?;
             let mut backend = FakeBackend::new(
                 &profile_id,
@@ -235,9 +240,24 @@ fn run() -> Result<i32> {
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, None))
                 .collect();
-            let directory =
-                write_evaluation(&out, &plan, &options.run_id, &records, &scores, Vec::new())?;
+            let directory = write_evaluation(
+                &out,
+                &plan,
+                &options.run_id,
+                &records,
+                &scores,
+                Vec::new(),
+                self_test.clone(),
+            )?;
             print_summary(&scores, &directory);
+            return Ok(trust_exit(&self_test));
+        }
+        "self-test" => {
+            let (catalog, plan) = load(&mut args)?;
+            args.done()?;
+            let results = canary::run(&plan, &catalog)?;
+            println!("{}", serde_json::to_string_pretty(&results)?);
+            return Ok(trust_exit(&results));
         }
         "evaluate" => {
             let run = PathBuf::from(args.positional()?);
@@ -256,8 +276,18 @@ fn run() -> Result<i32> {
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, annotations.as_ref()))
                 .collect();
-            let directory = write_evaluation(&run, &plan, &run_id, &records, &scores, problems)?;
+            let self_test = canary::run(&plan, &StimulusCatalog::load()?)?;
+            let directory = write_evaluation(
+                &run,
+                &plan,
+                &run_id,
+                &records,
+                &scores,
+                problems,
+                self_test.clone(),
+            )?;
             print_summary(&scores, &directory);
+            return Ok(trust_exit(&self_test));
         }
         "import-trace" => {
             let (catalog, plan) = load(&mut args)?;
@@ -306,8 +336,18 @@ fn run() -> Result<i32> {
             )?;
             let scores = vec![evaluate::score(&record, plan.plan.answer_deadline_ms, None)];
             let records = vec![record];
-            let directory = write_evaluation(&out, &plan, &run_id, &records, &scores, Vec::new())?;
+            let self_test = canary::run(&plan, &catalog)?;
+            let directory = write_evaluation(
+                &out,
+                &plan,
+                &run_id,
+                &records,
+                &scores,
+                Vec::new(),
+                self_test.clone(),
+            )?;
             print_summary(&scores, &directory);
+            return Ok(trust_exit(&self_test));
         }
         "annotation-template" => {
             let run = PathBuf::from(args.positional()?);
@@ -405,14 +445,32 @@ fn run() -> Result<i32> {
                 );
                 return Ok(0);
             }
+            // Lamp time is scarce: never run a physical suite with an evaluator
+            // that fails to detect its own injected failures.
+            let self_test = canary::run(&plan, &catalog)?;
+            if !canary::all_detected(&self_test) {
+                eprintln!("{}", serde_json::to_string_pretty(&self_test)?);
+                return Err(invalid(
+                    "evaluator self-test failed; refusing to start a physical run",
+                ));
+            }
+            let mut options = options;
+            options.self_test = serde_json::to_value(&self_test)?;
             create_run_directory(&out)?;
             let records = run_suite(&plan, &catalog, &mut backend, &options, &out)?;
             let scores: Vec<AttemptScore> = records
                 .iter()
                 .map(|r| evaluate::score(r, plan.plan.answer_deadline_ms, None))
                 .collect();
-            let directory =
-                write_evaluation(&out, &plan, &options.run_id, &records, &scores, Vec::new())?;
+            let directory = write_evaluation(
+                &out,
+                &plan,
+                &options.run_id,
+                &records,
+                &scores,
+                Vec::new(),
+                self_test,
+            )?;
             print_summary(&scores, &directory);
         }
         _ => return Err(invalid(USAGE)),
@@ -540,6 +598,7 @@ fn write_evaluation(
     records: &[AttemptRecord],
     scores: &[AttemptScore],
     problems: Vec<String>,
+    self_test: Vec<CanaryResult>,
 ) -> Result<PathBuf> {
     let parent = run.join("evaluations");
     if !parent.exists() {
@@ -547,7 +606,14 @@ fn write_evaluation(
     }
     let directory = parent.join(unix_ms().to_string());
     create_run_directory(&directory)?;
-    let report = report::build(run_id, &plan.plan.id, &plan.sha256, scores, problems);
+    let report = report::build(
+        run_id,
+        &plan.plan.id,
+        &plan.sha256,
+        scores,
+        problems,
+        self_test,
+    );
     write_new_json(
         &directory.join("evaluation.json"),
         &serde_json::to_value(&report)?,
@@ -580,4 +646,15 @@ fn print_summary(scores: &[AttemptScore], directory: &Path) {
         "{}",
         json!({"attempts": scores.len(), "outcomes": counts, "report": directory.join("report.md")})
     );
+}
+
+/// Exit code 2 when the evaluator failed its self-test: the report exists but
+/// is marked untrusted.
+fn trust_exit(self_test: &[CanaryResult]) -> i32 {
+    if canary::all_detected(self_test) {
+        0
+    } else {
+        eprintln!("lamp-voice-eval: evaluator self-test failed; the report is marked UNTRUSTED");
+        2
+    }
 }

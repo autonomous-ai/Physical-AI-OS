@@ -1,6 +1,7 @@
 //! Readable and machine-readable reports. Every stratum is summarized on its
 //! own; denominators are explicit and withheld/unscored items are listed.
 use crate::{
+    canary::CanaryResult,
     evaluate::{
         AnswerOutcome, AttemptScore, CheckStatus, FindingKind, Metric, MetricKind, Outcome,
         Severity,
@@ -254,6 +255,8 @@ pub struct Report<'a> {
     pub attempts: &'a [AttemptScore],
     pub limitations: Vec<String>,
     pub incomplete_ledger: Vec<String>,
+    /// Injected-failure canaries run with this evaluator before scoring.
+    pub self_test: Vec<CanaryResult>,
 }
 
 pub fn build<'a>(
@@ -262,6 +265,7 @@ pub fn build<'a>(
     plan_sha256: &str,
     scores: &'a [AttemptScore],
     incomplete_ledger: Vec<String>,
+    self_test: Vec<CanaryResult>,
 ) -> Report<'a> {
     let mut grouped: BTreeMap<Stratum, Vec<&AttemptScore>> = BTreeMap::new();
     for score in scores {
@@ -279,6 +283,7 @@ pub fn build<'a>(
         attempts: scores,
         limitations: limitations(scores),
         incomplete_ledger,
+        self_test,
     }
 }
 
@@ -324,6 +329,25 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
         "Plan `{}` (sha256 `{}`).\n",
         report.plan_id, report.plan_sha256
     );
+    let failures = report.self_test.iter().filter(|c| !c.detected).count();
+    if report.self_test.is_empty() {
+        let _ = writeln!(
+            out,
+            "**Evaluator self-test was not run; treat these scores as UNTRUSTED.**\n"
+        );
+    } else if failures > 0 {
+        let _ = writeln!(
+            out,
+            "**UNTRUSTED: {failures} of {} evaluator canaries were not detected.**\n",
+            report.self_test.len()
+        );
+    } else {
+        let _ = writeln!(
+            out,
+            "Evaluator self-test: all {} canaries behaved as expected (injected failures detected, clean controls passed).\n",
+            report.self_test.len()
+        );
+    }
     let _ = writeln!(out, "## Limits of this evidence\n");
     for note in &report.limitations {
         let _ = writeln!(out, "- {note}");
@@ -534,6 +558,26 @@ pub fn markdown(report: &Report, targets: &Targets) -> String {
                 "-".into()
             } else {
                 findings.join(", ")
+            }
+        );
+    }
+    let _ = writeln!(
+        out,
+        "\n## Evaluator self-test\n\n| Canary | Must show | Result |\n|---|---|---|"
+    );
+    for canary in &report.self_test {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} |",
+            canary.name,
+            canary.expects,
+            if canary.detected {
+                "ok".to_owned()
+            } else {
+                format!(
+                    "NOT DETECTED (outcome {:?}, findings {:?})",
+                    canary.outcome, canary.findings
+                )
             }
         );
     }

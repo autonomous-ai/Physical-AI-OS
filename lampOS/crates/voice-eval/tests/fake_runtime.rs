@@ -45,6 +45,7 @@ fn run(
         seed: 7,
         shuffle: false,
         attempt_seed: None,
+        self_test: serde_json::Value::Null,
     };
     let records = run_suite(&setup.plan, &setup.catalog, &mut backend, &options, &run).unwrap();
     // Every attempt is retained: planned and finished rows for each.
@@ -606,6 +607,7 @@ fn a_stale_trigger_withholds_the_stimulus_instead_of_playing_it_late() {
         seed: 7,
         shuffle: false,
         attempt_seed: None,
+        self_test: serde_json::Value::Null,
     };
     let records = run_suite(&s.plan, &s.catalog, &mut backend, &options, &run_dir).unwrap();
     let step = &records[0].steps[1];

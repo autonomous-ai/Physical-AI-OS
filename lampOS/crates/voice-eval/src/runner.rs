@@ -97,6 +97,8 @@ pub struct SuiteOptions {
     pub shuffle: bool,
     /// Reproduce one attempt exactly: use this attempt seed instead of deriving it.
     pub attempt_seed: Option<u64>,
+    /// Evaluator self-test results recorded in the run's first ledger row.
+    pub self_test: Value,
 }
 
 /// Runtime events seen live, in receipt order.
@@ -447,6 +449,7 @@ pub fn run_suite(
             "repetitions": options.repetitions,
             "shuffle": options.shuffle,
             "attempt_order": order,
+            "evaluator_self_test": options.self_test,
             "tool": {"package": env!("CARGO_PKG_NAME"), "version": env!("CARGO_PKG_VERSION"),
                      "os": std::env::consts::OS, "arch": std::env::consts::ARCH},
             "started_unix_ms": unix_ms(),

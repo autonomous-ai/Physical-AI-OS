@@ -655,3 +655,14 @@ fn rates_exclude_invalid_attempts_and_unscored_opportunities() {
     );
     assert_eq!(summary.false_interruption_opportunities.count, 1);
 }
+
+#[test]
+fn the_evaluator_detects_every_injected_failure_and_passes_clean_controls() {
+    let catalog = StimulusCatalog::load().unwrap();
+    let plan = LoadedPlan::default_plan(&catalog).unwrap();
+    let results = lamp_voice_eval::canary::run(&plan, &catalog).unwrap();
+    assert!(results.len() >= 20);
+    let missed: Vec<_> = results.iter().filter(|r| !r.detected).collect();
+    assert!(missed.is_empty(), "{missed:#?}");
+    assert!(results.iter().filter(|r| r.expects == "clean pass").count() >= 3);
+}
