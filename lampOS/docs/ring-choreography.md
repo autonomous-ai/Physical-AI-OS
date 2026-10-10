@@ -77,6 +77,63 @@ remains independent and much shorter: Controller snapshots are bounded to
 250 ms, and active input leases are 100 ms. Audio diagnostics retain their
 separate 600-second wall/sample cap; diagnostic runs must leave startup room.
 
+## Bounded renewal evidence
+
+Lease renewal still sends a real authority packet and frame every 20 ms when
+eligible, and validates every returned receipt. Trace retention is separate:
+logging two events per renewal previously filled the 20,000-event cap after
+about 200 seconds with a continuously active cue. The cap is unchanged.
+
+The first request and receipt for each owner/phase/ceiling remain individual
+`ring_requested` and `ring_feedback` events, as do new playback occurrences
+within the same turn. A cycle back to the same phase also stays individual
+when its presentation lineage changed, even if no intermediate cue was sent.
+During an unchanged cue, the first pair of each second
+also remains individual. Intervening renewals share one `ring_renewals` record
+and one raw `ring_requested` tail sample for that interval. This reduces a
+stable cue from about 100 to four retained events per second without changing
+any worker/control action or deadline.
+
+Each summary retains the original owner and first/last full frames, request
+count, validated presentation/rejection counts, unacknowledged count, exact
+first/last presentation receipts and request-to-write latency minimum, maximum
+and total. Its `at_us` is the first included request time;
+`last_updated_at_us` is the latest actual request/receipt observation. Neither
+replaces the worker's original write timestamps. A submitted frame without a
+validated receipt remains unacknowledged, including on timeout or shutdown.
+Receipts drained only during shutdown remain separate shutdown events.
+
+The coordinator updates those two fixed slots in its append-only in-memory
+trace. The tail sample always carries the latest actual request timestamp and
+full original frame, including before its receipt arrives. It is marked
+`trace_role: renewal_tail`; normal requests use `cue_or_periodic_head`. To count
+commands, add head requests to summary `requested` counts; do not count the
+tail samples again. Updating a tail can move its timestamp past interleaved
+voice events, but never moves indices or changes those events. Consumers must
+use original timestamps rather than infer time from array position. It keeps
+no renewal history outside the bounded trace and one pending request. Final shutdown needs no summary flush to preserve the last partial
+interval. Rejections, black writes, invalid receipts and service faults remain
+individual events with the original pending-frame identity where available.
+An unvalidated worker claim never increments successful presentation counts.
+
+The voice evaluator currently checks individual `ring_requested` phase/voice
+consistency and does not score `ring_feedback` or renewal summaries. Keeping
+all transitions plus exact first/last request samples preserves the interval
+boundaries used by those checks, including a stale tail exposed by a later
+retirement receipt with an earlier driver timestamp. Summary
+counts are additional operational evidence, not proof of physical light or
+per-renewal acoustic synchronization. Individual renewal percentiles cannot be
+reconstructed from min/max/total; do not describe the retained samples as all
+writes. A different high-rate event source or exceptionally frequent real
+transitions can still exhaust the unchanged global cap and fail the run.
+
+Host regression coverage uses the real coordinator service, Controller,
+choreographer and private Unix sockets with a virtual clock and synthetic
+worker receipts. It includes more than 10,000 renewal pairs, a 600-second
+schedule at 20 ms with dense voice events, phase/playback changes, interruption,
+and fault injection. This proves bounded software retention for that schedule,
+not physical SPI timing or a ten-minute acoustic trial.
+
 ## Failure and cancellation
 
 Light receipts are evidence; they cannot advance the conversation or revive
@@ -146,3 +203,71 @@ ARM64 qualification**. It has not been deployed. The earlier 518-test native
 audio checkpoint does not cover this source. Real SPI duration, physical light
 onset/off, startup/crash recovery, brightness and concurrency with actual audio
 remain unmeasured. No before/after voice speedup follows from this probe.
+
+### Renewal evidence qualification, 2026-10-11
+
+Before the correction, the production service with a virtual clock and private
+Unix sockets failed at zero-based renewal 9,999, retaining 19,999 events
+(199.98 simulated seconds). The same 10,050-pair workload now completes with
+804 retained events. A separate 600-second simulated schedule completes
+30,000 socket request/receipt pairs and retains 19,735 events, including
+16,800 voice events, 256 startup/shutdown reserve events, 19 cancellations and
+a visible terminal worker fault. These are synthetic workload results, not
+a physical ten-minute conversation or a claim that every event rate fits.
+
+The exact integrated standalone source passed **768 host tests, zero
+failed and zero ignored**, formatting, strict Clippy and both release builds:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets -- -D warnings
+cargo test --locked --offline --workspace --no-fail-fast -- --test-threads=1
+cargo build --locked --offline --release -p lamp-live -p lamp-voice-eval
+```
+
+Rust/Cargo/toolchain manifest: `962c876dae67917da4c831afb29978bb4d011f0b55b04b3257e4ea176033b374` (167 files;
+documentation excluded). Host: macOS x86-64. Sources were unchanged throughout
+the sequential gates; local socket tests ran outside the network sandbox.
+Independent review checked integration with playback occurrence identity,
+whole-turn completion, lifecycle cues and the evaluator's original timestamps.
+The original cap failure, hidden presentation-lineage and stale-tail red
+regressions, scoped receipts, combined gate logs and source archive are retained
+in `artifacts/ring-renewals-20261011/` with a separate durable backup.
+
+This checkpoint does not qualify ARM64/Linux, Gemini, physical SPI timing,
+light visibility, real interruption behavior or end-to-end voice latency.
+No actor command, lease, timeout, brightness limit or trace cap was relaxed.
+
+### Renewal bookkeeping cost on the host
+
+A separate release probe compared baseline `e8b961c79` with the same ring patch
+as the integrated checkpoint. It ran four fresh processes in before/after/
+after/before order, each with 2,000 complete request/receipt pairs over real
+private Unix sockets. The serialized request payloads matched across all four
+runs, including three cancellations and twelve phase changes per process.
+Both versions used the same virtual interaction clock and synthetic receipts.
+
+| Repeated service call | Before p50 / p95 / max, µs | After p50 / p95 / max, µs |
+|---|---:|---:|
+| Request: authority checks, control/data sends and trace mutation | 9.146 / 15.379 / 72.499 | 37.916 / 54.210 / 159.709 |
+| Feedback: receive, decoding, validation and trace mutation | 9.724 / 16.054 / 55.640 | 38.804 / 54.336 / 146.246 |
+| Idle: no due renewal or queued receipt | 0.939 / 1.600 / 19.441 | 1.220 / 1.812 / 17.649 |
+
+Each cell uses 3,998 samples, excluding only the first call per process.
+First requests were 83.921 and 103.477 µs before, versus 93.366 and 134.917 µs
+after. First feedback calls were 34.274 and 35.676 µs before, versus 38.021 and
+58.929 µs after. No outliers were removed. Each run retained 4,000 events before
+and 160 after; event count is not a byte-memory measurement.
+
+The richer summary costs about 29 µs more per typical request or feedback call
+on this Mac. Every measured call stayed under 2 ms, including first use. This
+does not establish a deadline for a loaded coordinator or ARM hardware.
+Timers exclude fixture construction, planned Controller transitions, mock-peer
+actions, SPI, worker scheduling and file serialization. First use starts after
+fixture construction, not at cold OS startup. CPU affinity, thermal state and
+real-time scheduling were uncontrolled; compilation had finished before timing.
+
+Raw nanosecond samples, first-use results, category breakdowns, outliers,
+instrumented probe sources and source/build/binary hash receipts are retained
+with the checkpoint evidence. This comparison measures bookkeeping cost;
+speech response time and physical light timing remain separate open checks.

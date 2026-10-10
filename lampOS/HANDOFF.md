@@ -10,6 +10,15 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
+- Fixed ring renewals exhausting the session trace after about 200 simulated
+  seconds. Routine evidence is summarized; every hardware command and receipt
+  check remains. Exact transition and tail samples preserve evaluator evidence.
+  A dense 600-second simulated schedule fits the original cap. Combined source
+  `962c876d` passed **768 host tests, zero failed or ignored**, formatting,
+  strict Clippy and both release builds. See [ring renewal qualification](docs/ring-choreography.md#renewal-evidence-qualification-2026-10-11)
+  for exact workloads, commands, source identity and limits. No device, ARM64,
+  optical or acoustic qualification follows from this checkpoint.
+
 - Fixed same-turn audio continuation losing an accepted final chunk and ending
   the session. Playback occurrences now retain separate tokens; whole-turn
   completion remains distinct. The runner waits for that completion, counts
@@ -18,8 +27,8 @@ parallel edits or integrating another agent's changes.
   **753 host tests, zero failed or ignored**, formatting, strict Clippy and
   both release builds. See [playback occurrences](docs/playback-occurrences.md)
   for the original failures, exact commands, source identity and limits.
-  No new ARM64, cloud, device or acoustic result follows. The separate ring
-  renewal trace-capacity correction is still pending integration.
+  No new ARM64, cloud, device or acoustic result follows. The subsequent ring
+  renewal trace-capacity correction is recorded above.
 
 - The preceding checkpoint made Gemini and fixture conversations share the
   optional lifecycle cue channel.

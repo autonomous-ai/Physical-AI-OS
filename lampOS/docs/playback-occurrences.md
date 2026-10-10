@@ -113,5 +113,7 @@ that development run as the checkpoint's full-suite evidence.
 
 ARM64/Linux, real Gemini response ordering, acoustic onset/end, boundary gaps
 and direct-human interruption remain unqualified by this host-only change.
-Playback-paced upstream delivery and the separate ring trace-capacity fix are
-still open. No speedup or release acceptance follows from these software tests.
+Playback-paced upstream delivery remains open. The separate
+[ring trace-capacity correction](ring-choreography.md#renewal-evidence-qualification-2026-10-11)
+is qualified in its own subsequent checkpoint. No speedup or release acceptance
+follows from these software tests.

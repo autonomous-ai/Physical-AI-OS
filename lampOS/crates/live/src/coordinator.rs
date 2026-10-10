@@ -39,6 +39,9 @@ use std::{
     process::Command,
     time::{Duration, Instant},
 };
+mod ring_trace;
+use ring_trace::RingTrace;
+
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub const MAX_DIRECTED_SECONDS: u64 = 600;
 const INPUT_READINESS_TIMEOUT: Duration = Duration::from_secs(25);
@@ -903,6 +906,7 @@ fn conversation(
         .ring_channel_ceiling
         .map(RingChoreographer::new)
         .transpose()?;
+    let mut ring_trace = RingTrace::default();
     let mut detector = TurnDetector::default();
     let mut admission = InputAdmission::default();
     let mut capture_lineage: Option<CaptureLineage> = None;
@@ -1450,7 +1454,13 @@ fn conversation(
             )?;
             *reply = None;
         }
-        service_ring(rig.ring.as_mut(), choreography.as_mut(), owner, trace)?;
+        service_ring(
+            rig.ring.as_mut(),
+            choreography.as_mut(),
+            owner,
+            trace,
+            &mut ring_trace,
+        )?;
         if clock.saturating_sub(last_health) >= 50_000 {
             rig.running()?;
             last_health = clock;
@@ -1470,43 +1480,63 @@ fn service_ring(
     choreography: Option<&mut RingChoreographer>,
     owner: &mut Controller,
     trace: &mut Vec<Value>,
+    ring_trace: &mut RingTrace,
+) -> Result<()> {
+    service_ring_with_clock(worker, choreography, owner, trace, ring_trace, now)
+}
+
+fn service_ring_with_clock(
+    worker: Option<&mut Worker>,
+    choreography: Option<&mut RingChoreographer>,
+    owner: &mut Controller,
+    trace: &mut Vec<Value>,
+    ring_trace: &mut RingTrace,
+    mut clock: impl FnMut() -> MonoTime,
 ) -> Result<()> {
     let (worker, choreography) = match (worker, choreography) {
         (None, None) => return Ok(()),
         (Some(worker), Some(choreography)) => (worker, choreography),
         _ => return Err(io::Error::other("ring worker and policy configuration disagree").into()),
     };
-    for _ in 0..16 {
-        match worker.channels.control.receive::<WorkerEvent>()? {
-            Some(WorkerEvent::Ring { report }) => {
-                let current = owner.snapshot(now())?;
-                choreography.feedback(&report, current, now())?;
-                record(
-                    trace,
-                    json!({"kind":"ring_feedback","at_us":monotonic_us(),"details":report,
-                    "boundary":"SPI write return; optical output unmeasured"}),
-                )?;
+    let result: Result<()> = (|| {
+        for _ in 0..16 {
+            match worker.channels.control.receive::<WorkerEvent>()? {
+                Some(WorkerEvent::Ring { report }) => {
+                    let validation = owner
+                        .snapshot(clock())
+                        .map_err(io::Error::other)
+                        .and_then(|current| choreography.feedback(&report, current, clock()));
+                    let error = validation.as_ref().err().map(ToString::to_string);
+                    ring_trace.feedback(report, clock().as_micros(), error.as_deref(), trace)?;
+                    validation?;
+                }
+                Some(WorkerEvent::Fault { code }) => return Err(io::Error::other(code).into()),
+                Some(_) => return Err(io::Error::other("unexpected ring worker event").into()),
+                None => break,
             }
-            Some(WorkerEvent::Fault { code }) => return Err(io::Error::other(code).into()),
-            Some(_) => return Err(io::Error::other("unexpected ring worker event").into()),
-            None => break,
         }
-    }
-    if let Some(frame) = choreography.prepare(owner, now())? {
-        // The data frame can never install authority or extend its own lease.
-        // The worker rereads this priority path after receiving the data frame.
-        worker.channels.control.send(Control::Authority {
-            snapshot: frame.snapshot,
-        })?;
-        worker.channels.data.send(frame)?;
-        record(
+        if let Some(frame) = choreography.prepare(owner, clock())? {
+            // The data frame can never install authority or extend its own lease.
+            // The worker rereads this priority path after receiving the data frame.
+            worker.channels.control.send(Control::Authority {
+                snapshot: frame.snapshot,
+            })?;
+            worker.channels.data.send(frame)?;
+            ring_trace.requested(frame, trace)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = &result {
+        // Include a submitted renewal's original identity even when the next
+        // receipt/transport faults. Trace exhaustion still retains run_end.
+        let _ = record(
             trace,
-            json!({"kind":"ring_requested","at_us":frame.requested_at_us,
-            "owner":frame.permit.owner(),"phase":frame.phase,"ceiling":frame.ceiling,
-            "permit_expires_at_us":frame.permit.expires_at().as_micros()}),
-        )?;
+            json!({"kind":"ring_service_fault",
+            "at_us":clock().as_micros(), "error":error.to_string(),
+            "pending_frame":choreography.pending()}),
+        );
     }
-    Ok(())
+    result
 }
 
 /// Called only after this tick's retained input and cancellation work. Keeping
@@ -1911,8 +1941,16 @@ mod tests {
         let previous = owner.admit(at, AdmittedInput::NewTurn).unwrap();
         let mut policy = RingChoreographer::new(24).unwrap();
         let mut trace = Vec::new();
+        let mut ring_trace = RingTrace::default();
 
-        service_ring(Some(&mut worker), Some(&mut policy), &mut owner, &mut trace).unwrap();
+        service_ring(
+            Some(&mut worker),
+            Some(&mut policy),
+            &mut owner,
+            &mut trace,
+            &mut ring_trace,
+        )
+        .unwrap();
         let frame = peer.data.receive::<RingFrame>().unwrap().unwrap();
         assert_eq!(frame.permit.owner(), previous);
         assert!(matches!(peer.control.receive::<Control>().unwrap(),
@@ -1931,7 +1969,14 @@ mod tests {
             })
             .unwrap();
 
-        service_ring(Some(&mut worker), Some(&mut policy), &mut owner, &mut trace).unwrap();
+        service_ring(
+            Some(&mut worker),
+            Some(&mut policy),
+            &mut owner,
+            &mut trace,
+            &mut ring_trace,
+        )
+        .unwrap();
         assert_eq!(owner.snapshot(now()).unwrap().owner(), Some(successor));
         let next = peer.data.receive::<RingFrame>().unwrap().unwrap();
         assert_eq!(next.permit.owner(), successor);
@@ -3229,3 +3274,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "coordinator/ring_trace_tests.rs"]
+mod ring_trace_tests;

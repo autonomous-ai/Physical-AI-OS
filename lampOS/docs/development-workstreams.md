@@ -84,6 +84,14 @@ provider-credit IPC contract and is not silently fixed in the reporting patch.
   outcome/gap metadata. Update producer and consumer together; preserve older
   plan hashes and original `SpeechRetired` semantics.
 
+- [Ring renewal retention](ring-choreography.md#bounded-renewal-evidence) keeps
+  exact transition/periodic heads and last-request samples plus summary counts.
+  `ring_requested` with `trace_role: renewal_tail` samples an already-counted
+  command. Count head requests plus summary `requested`, without adding tails.
+  Fixed trace slots can update their original timestamps past interleaved
+  records; use those timestamps, not array position. Actor commands and receipt
+  validation remain unchanged; summary counts are not optical evidence.
+
 - Opt-in audio diagnostics add optional `aec_internal_alignment_ms`; replay
   preserves it and emits separate `replayed_internal_alignment_ms` values.
   This is cached AEC buffer state, not confidence or an admission signal. The
