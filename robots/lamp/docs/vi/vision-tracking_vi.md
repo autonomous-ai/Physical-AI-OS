@@ -14,6 +14,22 @@ Toàn bộ code tracking nằm trong package `hal/drivers/tracking/`:
 | `filters.py` | `AlphaBetaFilter2D`, `PID`, `smooth_damp`, `soft_deadband` |
 | `frame_utils.py` | `downscale`, `scale_bbox` (map tọa độ) |
 
+### Quyền giữ freeze khi nhiều tác vụ camera chồng nhau
+
+Snapshot (`capture_still`), chụp sensing và khởi tạo tracker dùng chung lease
+freeze theo từng motion service (`hal/drivers/motors/freeze_lease.py`). Tác vụ đầu
+tiên freeze chuyển động; chỉ tác vụ cuối cùng kết thúc mới unfreeze. Exception
+và return sớm đều trả lease của chính tác vụ đó, kể cả lỗi đăng ký hoặc giải
+phóng camera consumer. Freeze thất bại không cấp lease; snapshot vẫn giữ cách
+chụp best-effort hiện có khi không freeze được.
+
+Chỉ thao tác nhận/trả quyền giữ bị khóa. Lấy frame, chờ ổn định và nhận diện vật
+thể vẫn chạy chồng nhau; không thêm timer, sleep hay network call. Các giá trị
+settle/timeout hiện có không đổi. Caller camera mới phải dùng lease chung thay vì
+gọi thẳng `freeze()` / `unfreeze()` của driver. Cơ chế này phối hợp freeze hiện
+có; không thay đổi chính sách chuyển động của driver và chưa phải bộ điều phối
+chuyển động toàn cục.
+
 ## Định tuyến intent giọng nói
 
 Yêu cầu voice không khớp rule local có thể qua nhánh Jev của OS để chọn

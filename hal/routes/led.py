@@ -129,6 +129,7 @@ def _set_led_solid(req: LEDSolidRequest, *, source: str | None = None):
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
     color = tuple(req.color) if isinstance(req.color, list) else req.color
+    state._cancel_pending_restore()
     state._stop_current_effect()
     state.rgb_service.dispatch(RGB_CMD_SOLID, color)
     # Transient overlays must not exit the active scene.
@@ -181,6 +182,7 @@ def set_led_paint(req: LEDPaintRequest):
     else:
         colors = [tuple(c) if isinstance(c, list) else c for c in req.colors]
     # A running effect repaints every ~40ms; stop it first.
+    state._cancel_pending_restore()
     state._stop_current_effect()
     state.rgb_service.dispatch(RGB_CMD_PAINT, colors)
     if not req.transient:
@@ -211,6 +213,7 @@ def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
         not transient and state._user_led_state
         and state._user_led_state.get("source") == "status:setup"
     )
+    state._cancel_pending_restore()
     state._stop_current_effect()
     state.rgb_service.clear()
     if not transient:
@@ -255,6 +258,7 @@ def start_led_effect(req: LEDEffectRequest):
         return {"status": "ok", "effect": req.effect, "speed": req.speed}
 
     # No "light is off" guard: transient status cues may light a resting strip.
+    state._cancel_pending_restore()
     state._stop_current_effect()
     if not req.transient:
         _end_scene()

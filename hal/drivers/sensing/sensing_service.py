@@ -17,6 +17,7 @@ import requests
 import hal.config as config
 from hal.drivers.camera.video_capture_device import VideoCaptureDeviceBase
 from hal.drivers.motors.animation_service import AnimationService
+from hal.drivers.motors.freeze_lease import freeze_lease
 from hal.drivers.rgb.rgb_service import RGBService
 from hal.drivers.sensing.perceptions.models import PerceptionConfig
 from hal.drivers.sensing.perceptions.orchestrator import PerceptionOrchestrator
@@ -143,12 +144,10 @@ class SensingService:
             return None
 
         anim = self._animation_service
-        if anim:
-            anim.freeze()
-            time.sleep(self.FREEZE_SETTLE_S)
-        frame = self._camera.capture()
-        if anim:
-            anim.unfreeze()
+        with freeze_lease(anim):
+            if anim:
+                time.sleep(self.FREEZE_SETTLE_S)
+            frame = self._camera.capture()
 
         if frame is None:
             return None
