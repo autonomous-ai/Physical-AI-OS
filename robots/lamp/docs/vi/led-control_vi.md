@@ -501,3 +501,7 @@ realtime đang giữ mà không chờ TTS. Phản hồi mute hoặc không có l
 giữ cue vô hạn. Cleanup giữ emotion mới, khôi phục LED đã lưu (kể cả tắt/dim);
 TTS/nhạc đang phát giữ overlay tới teardown bình thường. Lượt do agent xử lý
 vẫn giữ cue thinking.
+
+### Quyền sở hữu timer khôi phục
+
+Mỗi timer khôi phục LED mang một mã thế hệ. Thay thế hoặc hủy sẽ vô hiệu hóa cả callback timer đã được đưa vào chạy; callback cũ không được đổi đèn hay xóa timer mới. Khôi phục trực tiếp cũng vô hiệu hóa timer đang chờ. Nếu lượt khôi phục đã bắt đầu vẽ, lượt đó hoàn tất trước khi bên mới nhận quyền, thông qua khóa vòng đời tái nhập. Không thêm cửa chờ hay network call, nhưng hủy có thể phải đợi phần vẽ/dừng hiệu ứng hiện tại; thay đổi này chưa loại bỏ giới hạn chờ thread hiệu ứng hai giây đang có.

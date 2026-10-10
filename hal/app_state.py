@@ -188,6 +188,8 @@ _active_scene: Optional[str] = None
 
 _user_led_state: Optional[dict] = None
 _restore_timer: Optional[threading.Timer] = None
+_restore_lock = threading.RLock()
+_restore_generation = 0
 _sleeping: bool = False
 _current_emotion: Optional[str] = None
 _emotion_state_lock = threading.Lock()
@@ -328,11 +330,13 @@ def _stop_current_effect():
 
 
 def _cancel_pending_restore():
-    """Cancel any pending emotion restore timer."""
-    global _restore_timer
-    if _restore_timer is not None and _restore_timer.is_alive():
-        _restore_timer.cancel()
-        _restore_timer = None
+    """Invalidate queued restores and order replacement after any running restore."""
+    global _restore_timer, _restore_generation
+    with _restore_lock:
+        _restore_generation += 1
+        if _restore_timer is not None:
+            _restore_timer.cancel()
+            _restore_timer = None
 
 
 # Boot-scoped sidecars (restored on service restart, cleared on reboot).
@@ -823,9 +827,7 @@ def _start_preset_effect(preset: dict, thread_name: str):
     global _restore_timer, _effect_thread, _effect_name, _effect_base_color
     if not rgb_service:
         return
-    if _restore_timer is not None and _restore_timer.is_alive():
-        _restore_timer.cancel()
-        _restore_timer = None
+    _cancel_pending_restore()
     _stop_current_effect()
     color = tuple(preset["color"])
     if preset["effect"] == LST_SOLID:
@@ -966,10 +968,17 @@ def _flash_backend_error():
     ).start()
 
 
-def _restore_user_led():
-    """Restore LED to user state after emotion animation completes."""
-    global _restore_timer
-    _restore_timer = None
+def _restore_user_led(generation=None):
+    """Reject obsolete timers; serialize an admitted restore with replacement."""
+    with _restore_lock:
+        if generation is not None and generation != _restore_generation:
+            return
+        _cancel_pending_restore()
+        _restore_user_led_display()
+
+
+def _restore_user_led_display():
+    """Restore LED state while the caller owns the restore lifecycle lock."""
 
     # Sleep is terminal: late restores must not repaint the strip.
     if _sleeping:
@@ -1122,14 +1131,15 @@ def clear_listening_pending_cue(cue_id: Optional[int] = None, restore: bool = Tr
 
 
 def _schedule_led_restore(delay_s: float):
-    """Schedule _restore_user_led to run after delay_s seconds."""
+    """Schedule a restore tied to this generation, even after Timer.cancel races."""
     global _restore_timer
-    if _restore_timer is not None and _restore_timer.is_alive():
-        _restore_timer.cancel()
-    t = threading.Timer(delay_s, _restore_user_led)
-    t.daemon = True
-    t.start()
-    _restore_timer = t
+    with _restore_lock:
+        _cancel_pending_restore()
+        generation = _restore_generation
+        timer = threading.Timer(delay_s, lambda: _restore_user_led(generation))
+        timer.daemon = True
+        _restore_timer = timer
+        timer.start()
 
 
 def _on_tts_speak_start():
@@ -1151,9 +1161,7 @@ def _on_tts_speak_start():
 
     _tts_speaking = True
 
-    if _restore_timer is not None and _restore_timer.is_alive():
-        _restore_timer.cancel()
-        _restore_timer = None
+    _cancel_pending_restore()
 
     _stop_current_effect()
 
@@ -1234,9 +1242,7 @@ def _on_music_play_start():
 
     _music_playing = True
 
-    if _restore_timer is not None and _restore_timer.is_alive():
-        _restore_timer.cancel()
-        _restore_timer = None
+    _cancel_pending_restore()
 
     _stop_current_effect()
 

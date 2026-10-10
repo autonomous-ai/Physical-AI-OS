@@ -507,3 +507,7 @@ realtime thinking cue without waiting for TTS. Muted or silent replies therefore
 do not leave the cue active. Cleanup preserves newer emotions and restores the
 saved LED state (including off/dim); active speech/music retains its overlay
 until normal playback teardown. Agent-owned turns retain their thinking cue.
+
+### Restore timer ownership
+
+Each scheduled LED restore carries a generation. Replacing or cancelling it invalidates callbacks already dispatched by the timer; they cannot repaint or clear the newer timer. Immediate restores invalidate queued restores too. A restore already rendering finishes before a replacement takes ownership, serialized by a reentrant lifecycle lock. This adds no delay window or network call, but cancellation can wait for existing rendering/effect shutdown; it does not remove the existing two-second effect join ceiling.
