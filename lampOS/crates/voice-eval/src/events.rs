@@ -65,7 +65,7 @@ pub enum EventKind {
         phase: String,
     },
     /// A reply revoked before completion (`turn_finished` with an owner).
-    /// Cues do not carry the reason; the final trace does.
+    /// Cues preserve the optional original outcome; the final trace also carries it.
     TurnCancelled {
         reason: Option<String>,
         provider_audio_seen: Option<bool>,
@@ -288,47 +288,57 @@ pub fn parse_trace(text: &str) -> Result<(Vec<RuntimeEvent>, usize)> {
     Ok((events, unmapped))
 }
 
-/// lamp-live cue datagram (`fixture_provider::CueSink`, schema 1).
+/// lamp-live scheduling datagram (`fixture_provider::CueSink`, schema 1).
+/// These timestamps are software events, never microphone/speaker onsets.
+pub const CUE_FRESH_US: u64 = 100_000;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Cue {
     pub schema: u8,
     pub sequence: u64,
     pub kind: String,
+    pub boot: [u8; 16],
     pub turn: Option<u64>,
     pub generation: Option<u64>,
+    pub capture_epoch: Option<u64>,
+    pub reference_epoch_context: Option<u64>,
     pub event_us: u64,
     pub sent_us: u64,
     pub expires_us: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 pub fn parse_cue(bytes: &[u8]) -> Result<Cue> {
     if bytes.len() > 512 {
         return Err(invalid("cue exceeds 512 bytes"));
     }
-    let value: Value = serde_json::from_slice(bytes)?;
-    let cue = Cue {
-        schema: value["schema"].as_u64().unwrap_or(0) as u8,
-        sequence: value["sequence"]
-            .as_u64()
-            .ok_or_else(|| invalid("cue without sequence"))?,
-        kind: value["kind"]
-            .as_str()
-            .ok_or_else(|| invalid("cue without kind"))?
-            .to_owned(),
-        turn: value["turn"].as_u64(),
-        generation: value["generation"].as_u64(),
-        event_us: value["event_us"]
-            .as_u64()
-            .ok_or_else(|| invalid("cue without event time"))?,
-        sent_us: value["sent_us"]
-            .as_u64()
-            .ok_or_else(|| invalid("cue without send time"))?,
-        expires_us: value["expires_us"]
-            .as_u64()
-            .ok_or_else(|| invalid("cue without expiry"))?,
+    let cue: Cue = serde_json::from_slice(bytes)?;
+    let owned = match cue.kind.as_str() {
+        "listening_ready" | "run_end" => false,
+        "input_admitted"
+        | "local_endpoint"
+        | "speaker_first_write"
+        | "speech_retired"
+        | "cancelled" => true,
+        _ => return Err(invalid("unknown cue kind")),
     };
-    if cue.schema != 1 || cue.sent_us < cue.event_us || cue.expires_us <= cue.event_us {
-        return Err(invalid("unsupported or inconsistent cue"));
+    if cue.schema != 1
+        || cue.sequence == 0
+        || cue.boot == [0; 16]
+        || cue.sent_us < cue.event_us
+        || cue.sent_us >= cue.expires_us
+        || cue.event_us.checked_add(CUE_FRESH_US) != Some(cue.expires_us)
+        || (owned && (cue.turn.is_none_or(|v| v == 0) || cue.generation.is_none_or(|v| v == 0)))
+        || (!owned && (cue.turn.is_some() || cue.generation.is_some()))
+        || cue.capture_epoch == Some(0)
+        || cue.reference_epoch_context == Some(0)
+        || cue
+            .reason
+            .as_ref()
+            .is_some_and(|s| cue.kind != "cancelled" || s.is_empty())
+    {
+        return Err(invalid("unsupported or inconsistent cue identity/times"));
     }
     Ok(cue)
 }
@@ -337,10 +347,18 @@ impl Cue {
     pub fn event(&self) -> Option<RuntimeEvent> {
         let kind = match self.kind.as_str() {
             "listening_ready" => EventKind::ListeningReady,
+            "input_admitted" => EventKind::InputAdmitted {
+                prefix_first_read_us: None,
+                candidate: None,
+                basis: None,
+            },
+            "local_endpoint" => EventKind::LocalEndpoint {
+                last_block_read_us: None,
+            },
             "speaker_first_write" => EventKind::SpeakerFirstWrite,
             "speech_retired" => EventKind::SpeechRetired,
             "cancelled" => EventKind::TurnCancelled {
-                reason: None,
+                reason: self.reason.clone(),
                 provider_audio_seen: None,
             },
             "run_end" => EventKind::RunEnd {
@@ -389,8 +407,10 @@ pub fn to_trace(event: &RuntimeEvent, owner: Option<Value>) -> Value {
         EventKind::ProviderInputStarted => {
             json!({"kind":"provider_input_started","waiting_for_barrier":false})
         }
-        EventKind::LocalEndpoint { last_block_read_us } => json!({"kind":"local_endpoint",
-            "last_block_host_read_us":last_block_read_us,"includes_silence_wait_ms":600,"acoustic_speech_end":null}),
+        EventKind::LocalEndpoint { last_block_read_us } => {
+            json!({"kind":"local_endpoint","owner":owner,
+            "last_block_host_read_us":last_block_read_us,"includes_silence_wait_ms":600,"acoustic_speech_end":null})
+        }
         EventKind::ProviderFirstAudio => json!({"kind":"provider_first_audio"}),
         EventKind::SpeakerFirstWrite => json!({"kind":"speaker_first_write","owner":owner}),
         EventKind::SpeechRetired => json!({"kind":"speech_final_sample_retired","owner":owner}),
@@ -592,5 +612,64 @@ mod tests {
         assert!(parse_cue(stale).is_err());
         let future = br#"{"schema":2,"sequence":2,"kind":"run_end","event_us":100,"sent_us":100,"expires_us":100100}"#;
         assert!(parse_cue(future).is_err());
+    }
+    #[test]
+    fn directed_cues_preserve_owner_epochs_and_cancel_reason() {
+        for (kind, name) in [
+            ("input_admitted", "input_admitted"),
+            ("local_endpoint", "local_endpoint"),
+            ("cancelled", "turn_cancelled"),
+        ] {
+            let value = json!({"schema":1,"sequence":1,"kind":kind,"boot":vec![7;16],
+                "turn":1,"generation":2,"capture_epoch":3,"reference_epoch_context":4,
+                "event_us":10,"sent_us":12,"expires_us":100010,
+                "reason":if kind == "cancelled" { Some("user_interrupted") } else { None }});
+            let cue = parse_cue(&serde_json::to_vec(&value).unwrap()).unwrap();
+            assert_eq!(
+                (
+                    cue.boot,
+                    cue.turn,
+                    cue.generation,
+                    cue.capture_epoch,
+                    cue.reference_epoch_context
+                ),
+                ([7; 16], Some(1), Some(2), Some(3), Some(4))
+            );
+            assert_eq!(cue.event().unwrap().name(), name);
+            if kind == "cancelled" {
+                assert!(
+                    matches!(cue.event().unwrap().kind, EventKind::TurnCancelled { reason: Some(reason), .. } if reason == "user_interrupted")
+                );
+            }
+            if kind == "cancelled" {
+                let mut legacy = value.clone();
+                legacy.as_object_mut().unwrap().remove("reason");
+                assert!(matches!(
+                    parse_cue(&serde_json::to_vec(&legacy).unwrap())
+                        .unwrap()
+                        .event()
+                        .unwrap()
+                        .kind,
+                    EventKind::TurnCancelled { reason: None, .. }
+                ));
+            }
+            for (field, bad) in [
+                ("schema", json!(257)),
+                ("sequence", json!(0)),
+                ("boot", json!(vec![0; 16])),
+                ("turn", Value::Null),
+                ("generation", json!(0)),
+                ("expires_us", json!(100011)),
+                ("sent_us", json!(100010)),
+                ("kind", json!("invented")),
+            ] {
+                let mut invalid = value.clone();
+                invalid[field] = bad;
+                assert!(
+                    parse_cue(&serde_json::to_vec(&invalid).unwrap()).is_err(),
+                    "{invalid}"
+                );
+            }
+        }
     }
 }

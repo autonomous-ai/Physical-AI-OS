@@ -38,7 +38,7 @@ never pool groups.
 | `fake_timing` | Fake runtime, declared speech intervals | Turn-policy consequences: false/missed interruptions, splits, unwanted responses, provider-fault handling, voice/ring state. Not level- or acoustics-sensitive. |
 | `fake_signal` | Fake runtime, lamp-live VAD on the exact cached digital mixes | The same, plus what the VAD/detector does with the real stimulus waveform. No room, loudspeaker, microphone or AEC; host VAD numerics can differ from native ARM64. |
 | `physical_fixture` | `lamp-live directed-fixture` on the Lamp | Real capture/echo path with the cached Gemini reply. Only the first turn has a reply. |
-| `physical_gemini` | `lamp-live directed` | Real conversation. Event-triggered steps need proposal P1. |
+| `physical_gemini` | `lamp-live directed` | Conversation with event-triggered follow-ups and interruptions through the optional cue socket. |
 | `imported_trace` | An existing lamp-live `events.jsonl` | Retained trials scored with declared turn attribution. |
 
 | Source | Meaning |
@@ -273,12 +273,13 @@ owners are active, and such an attempt is retained as failed.
    the annotation template and run `evaluate`.
 
 With the fixture provider the ready scenarios are `fixed-reply-echo-only`,
-`fixed-reply-acknowledgment` and `fixed-reply-topic-change`. With Gemini, only
-scenarios whose steps all follow readiness run until P1 lands; the rest are
-withheld with that reason. Cues carry no admissions, so a reply-triggered step
-binds to the first reply newer than every turn seen in cues; an echo turn
-admitted in between can be bound instead (the evaluator still reports the false
-interruption). P1's `input_admitted` cue removes that ambiguity.
+`fixed-reply-acknowledgment` and `fixed-reply-topic-change`. Gemini sessions now
+receive the same lifecycle cues, including admissions and local endpoints, so
+follow-up and interruption scenarios can use actual playback events. Missing,
+stale or invalid cues cannot be replaced by guessed delays. Provider-specific
+and fault-injection restrictions still apply. See [directed cue evaluation](voice-eval-directed-cues.md).
+An admission cue reports the runtime's decision; it does not prove that a human
+addressed Lamp or that echo was rejected.
 
 ## Measured behavior of the runner itself
 
@@ -311,11 +312,11 @@ construction there; `fake_signal` with the real cache or physical runs are
 needed for them. See [voice defects](voice-eval-defects.md) for the ranked list,
 owners and exact reproduction commands.
 
-## Proposals outside this crate (not implemented)
+## Runtime integration and remaining proposals
 
-- **P1: cues in `directed` mode.** Pass the existing `--cue-socket` option through
-  `run_directed_with_options`, and add `input_admitted` and `local_endpoint` cue
-  kinds (and the cancellation reason) to `CueKind`.
+- **P1 implemented:** Gemini-directed sessions now use [conversation lifecycle cues](live-session-cues.md),
+  including admissions, endpoints and original cancellation reasons. Host producer
+  and relay checks do not substitute for ARM64 or real Lamp qualification.
 - **P2: utterance timing in render manifests.** Adding each utterance's cache key
   and measured active-speech span to `RenderReport` would replace text/energy
   estimates of clip boundaries.

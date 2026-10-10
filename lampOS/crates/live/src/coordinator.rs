@@ -12,7 +12,7 @@ use crate::{
     choreography::RingChoreographer,
     diagnostic_control::{self, DiagnosticFinished, DiagnosticStream},
     fixture_provider::{CueSink, Fixture, FixtureInfo, FixtureOptions},
-    options::{AudioWorkerOptions, DirectedOptions, NoiseSuppression},
+    options::{AudioWorkerOptions, DirectedOptions, NoiseSuppression, SessionOptions},
     privacy::PrivacyGate,
     process::{SessionDirectory, Worker, new_boot},
     provider_flow::{MAX_REPLY_SAMPLES, OutputReceiver, PACKET_SAMPLES},
@@ -443,13 +443,37 @@ pub fn run_directed_with_options(
     output: &Path,
     options: DirectedOptions,
 ) -> Result<()> {
+    run_directed_session(
+        config,
+        seconds,
+        output,
+        SessionOptions {
+            directed: options,
+            cue_socket: None,
+        },
+    )
+}
+
+/// Observe the same directed conversation without changing its admission,
+/// ownership or audio policy. The optional sink never waits for its consumer.
+pub fn run_directed_session(
+    config: &Path,
+    seconds: u64,
+    output: &Path,
+    options: SessionOptions,
+) -> Result<()> {
+    let cues = options
+        .cue_socket
+        .as_deref()
+        .map(CueSink::connect)
+        .transpose()?;
     run_source(
         ProviderSource::Gemini(config),
         seconds,
         output,
-        options,
+        options.directed,
         None,
-        None,
+        cues,
     )
 }
 
@@ -1352,7 +1376,7 @@ fn conversation(
                     });
                     record(
                         trace,
-                        json!({"kind":"local_endpoint","turn":current.owner.turn(),"at_us":at,"last_block_host_read_us":input_end_us,"includes_silence_wait_ms":600,"acoustic_speech_end":null}),
+                        json!({"kind":"local_endpoint","owner":current.owner,"turn":current.owner.turn(),"at_us":at,"last_block_host_read_us":input_end_us,"includes_silence_wait_ms":600,"acoustic_speech_end":null}),
                     )?;
                 }
             }

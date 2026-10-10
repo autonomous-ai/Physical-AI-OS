@@ -36,7 +36,8 @@ Agent 2 delivered the Rust voice acceptance runner through `3eaa0365a`, with
 ledger and per-attempt reports. Root integration preserves recording verification
 and answer-quality accounting, and fixes prompted-human scoring and historical
 plan compatibility. Continue hardening the relay and exercise real coordinator
-events after Codex adds the proposed directed-mode cue interface.
+events using the integrated [directed-mode cue interface](live-session-cues.md).
+The interface is host-tested; physical qualification remains pending.
 Cover quick/long replies, pauses, topic changes, repeated interruption, background
 and multi-speaker speech, other-device speech, noise, failures/recovery and
 ring/voice consistency. Rank reproducible bugs and retain failed and

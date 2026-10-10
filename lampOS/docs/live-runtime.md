@@ -271,7 +271,14 @@ target/release/lamp-live directed /absolute/private/provider.json 60 /new/privat
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/diagnostic-run --diagnostics
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/aec-only-run --diagnostics --noise-suppression off
 target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/ring-run --diagnostics --ring-channel-ceiling 24
+target/release/lamp-live directed /absolute/private/provider.json 45 /new/private/observed-run --cue-socket /absolute/private/session/cue.sock
 ```
+
+`--cue-socket` enables the bounded local [conversation lifecycle cues](live-session-cues.md)
+for event-triggered qualification. The consumer binds the private socket first.
+This metadata-only option is independent of PCM recording and does not change
+voice ownership or admission. A scheduling fault is recorded without blocking
+capture or cancellation.
 
 `--noise-suppression on|off` selects a controlled software-processing experiment
 before capture starts. The default is `on`, preserving `EchoProcessor::new(true)`;

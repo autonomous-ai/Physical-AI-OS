@@ -70,6 +70,14 @@ control handling. The Rust implementation reserves at most two provider packets
 in flight, retains strict IPC age checks and keeps the 30-second coordinator
 backlog bound. Upstream playback-paced delivery remains a separate open test.
 
+For [conversation lifecycle cues](live-session-cues.md), preserve V1 main
+`d5efe9d7b`'s `hal/telemetry/voice_metrics.py` distinction between monotonic
+observations, interaction ownership and unknown endpoints. A software callback
+does not prove acoustic onset. Reuse Rust's existing bounded `CueSink` and Unix
+datagrams for both providers; no new bus, callback authority, timer thread or
+network dependency belongs on this observation path.
+
+
 ## Borrow from current ROS 2
 
 **Lifecycle:** ROS 2 distinguishes configuration, inactivity, activation and

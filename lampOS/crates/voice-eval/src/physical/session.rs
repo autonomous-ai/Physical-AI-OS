@@ -1,7 +1,7 @@
 //! Lamp-side relay for one finite lamp-live session.
 //!
 //! It creates a fresh private work directory, binds the cue socket that
-//! `lamp-live directed-fixture --cue-socket` connects to, starts the runtime,
+//! `lamp-live directed` or `directed-fixture --cue-socket` connects to, starts the runtime,
 //! and relays cues, stdout lines and ping replies as JSON lines. After the
 //! runtime exits (or is killed at the hard deadline) it streams the final
 //! `events.jsonl`. It never stops or starts services and never touches mixers
@@ -140,8 +140,6 @@ impl SessionOptions {
                     "--diagnostics".into(),
                     "--noise-suppression".into(),
                     self.noise_suppression.clone(),
-                    "--cue-socket".into(),
-                    text(&self.cue_path()),
                 ]);
             }
             SessionMode::Directed { provider_config } => {
@@ -158,6 +156,9 @@ impl SessionOptions {
                 }
             }
         }
+        // Both modes explicitly request the scheduling capability. An older
+        // runtime must fail its CLI, never fall back to guessed delays.
+        argv.extend(["--cue-socket".into(), text(&self.cue_path())]);
         if let Some(ceiling) = self.ring_channel_ceiling {
             argv.extend(["--ring-channel-ceiling".into(), ceiling.to_string()]);
         }
@@ -221,22 +222,21 @@ pub fn run<R: Read + Send + 'static>(
         child: None,
         socket: None,
     };
-    let cue = match options.mode {
-        SessionMode::Fixture { .. } => {
-            let socket = UnixDatagram::bind(options.cue_path())?;
-            cleanup.socket = Some(options.cue_path());
-            socket.set_nonblocking(true)?;
-            Some(socket)
-        }
-        SessionMode::Directed { .. } => None,
-    };
+    let socket = UnixDatagram::bind(options.cue_path())?;
+    cleanup.socket = Some(options.cue_path());
+    socket.set_nonblocking(true)?;
+    let cue = Some(socket);
     let argv = options.argv();
     emit(
         out,
         &SessionLine::SessionStart {
             schema: SCHEMA,
             lamp_us: monotonic_us(),
-            mode: if cue.is_some() { "fixture" } else { "directed" }.into(),
+            mode: match options.mode {
+                SessionMode::Fixture { .. } => "fixture",
+                SessionMode::Directed { .. } => "directed",
+            }
+            .into(),
             cue_socket: cue.is_some(),
             runtime_argv: argv.clone(),
         },
@@ -336,16 +336,24 @@ pub fn run<R: Read + Send + 'static>(
         }
     }
     if let Some(socket) = &cue {
-        while let Ok(count) = socket.recv(&mut buffer) {
-            if let Ok(cue) = serde_json::from_slice(&buffer[..count]) {
-                emit(
-                    out,
-                    &SessionLine::Cue {
-                        lamp_received_us: monotonic_us(),
-                        cue,
-                    },
-                )?;
-            }
+        for _ in 0..64 {
+            let count = match socket.recv(&mut buffer) {
+                Ok(count) => count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error.into()),
+            };
+            let lamp_received_us = monotonic_us();
+            let line = match parse_cue(&buffer[..count]) {
+                Ok(_) => SessionLine::Cue {
+                    lamp_received_us,
+                    cue: serde_json::from_slice(&buffer[..count])?,
+                },
+                Err(error) => SessionLine::CueInvalid {
+                    lamp_received_us,
+                    error: error.to_string(),
+                },
+            };
+            emit(out, &line)?;
         }
     }
     let events_path = options.runtime_output().join("events.jsonl");

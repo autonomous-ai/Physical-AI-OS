@@ -10,8 +10,18 @@ The broader goal remains unfinished; this document is not release acceptance.
 See [voice workstream ownership](docs/development-workstreams.md) before making
 parallel edits or integrating another agent's changes.
 
-- Latest integration includes Agent 2 through `3eaa0365a` (42 scenarios,
-  21 evaluator canaries), plus prompted-human scoring and historical-plan fixes.
+- Gemini and fixture conversations now share the optional lifecycle cue channel.
+  The runner can trigger actual-retirement follow-ups and in-playback topic
+  changes, preserving ownership, expiry and original observation times.
+  Combined source `5a827d27` passed **724 host tests, zero failed or
+  ignored**, formatting, strict Clippy and both release builds. See
+  [directed cue integration](docs/directed-cues-integration-20261011.md) for
+  exact commands, source identity and the simulated/physical distinction.
+  No new ARM64, cloud, device or acoustic qualification follows.
+
+- The preceding evaluator integration includes Agent 2 through `3eaa0365a`
+  (42 scenarios, 21 evaluator canaries), plus prompted-human scoring and
+  historical-plan fixes.
   Source `30263f21` passed **712 host tests, zero failed or ignored**,
   formatting, strict Clippy and both release builds. See
   [integration evidence](docs/voice-eval-integration-20261011.md) for the full
@@ -39,8 +49,8 @@ parallel edits or integrating another agent's changes.
   and [verifies room WAV evidence](docs/voice-eval-recording-evidence.md) before
   acoustic scoring. Known irrelevant/incomplete or duplicate/split answers do
   not improve completion rates, and missing/changed recordings remain unscored.
-  Unreviewed playback still cannot establish semantic success. Root-owned
-  directed-mode cues, playback-paced upstream delivery, relay framing, and
+  Unreviewed playback still cannot establish semantic success. Directed-mode
+  cues are integrated; playback-paced upstream delivery, relay framing, and
   physical admission/echo qualification remain open in the workstream notes.
 
 - [AEC alignment diagnostics](docs/aec-alignment.md) now record Sonora's cached

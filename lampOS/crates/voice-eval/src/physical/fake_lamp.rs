@@ -20,7 +20,7 @@ use std::{
     fs,
     io::Write,
     os::unix::{fs::DirBuilderExt, net::UnixDatagram},
-    path::PathBuf,
+    path::{Path, PathBuf},
     thread,
     time::Duration,
 };
@@ -29,13 +29,16 @@ pub const ROOM_MAX_BYTES: usize = 2048;
 const BOOT_BYTES: [u8; 16] = [7; 16];
 
 /// `fake-lamp-live --fake-scenario ID --fake-profile ID --fake-room SOCKET
-/// [--fake-seed N] [--fake-session-seconds N] directed-fixture WAV SHA SECONDS OUT ...`
+/// [--fake-seed N] [--fake-session-seconds N]
+/// [--fake-cue-fault drop-retirement|stale-retirement]
+/// directed-fixture WAV SHA SECONDS OUT ... (or directed CONFIG SECONDS OUT ...)`
 pub fn run(arguments: &[String]) -> Result<i32> {
     let mut scenario = None;
     let mut profile = None;
     let mut room = None;
     let mut seed = 1;
     let mut session_override = None;
+    let mut cue_fault = None;
     let mut index = 0;
     while index < arguments.len() && arguments[index].starts_with("--fake-") {
         let value = arguments
@@ -48,6 +51,11 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             "--fake-room" => room = Some(PathBuf::from(value)),
             "--fake-seed" => seed = value.parse()?,
             "--fake-session-seconds" => session_override = Some(value.parse::<u16>()?),
+            "--fake-cue-fault"
+                if matches!(value.as_str(), "drop-retirement" | "stale-retirement") =>
+            {
+                cue_fault = Some(value)
+            }
             other => return Err(invalid(&format!("unknown fake option {other}"))),
         }
         index += 2;
@@ -63,7 +71,12 @@ pub fn run(arguments: &[String]) -> Result<i32> {
             (rest[3].parse::<u16>()?, PathBuf::from(&rest[4]), cue)
         }
         Some("directed") if rest.len() >= 4 => {
-            (rest[2].parse::<u16>()?, PathBuf::from(&rest[3]), None)
+            let cue = rest
+                .iter()
+                .position(|a| a == "--cue-socket")
+                .and_then(|i| rest.get(i + 1))
+                .map(PathBuf::from);
+            (rest[2].parse::<u16>()?, PathBuf::from(&rest[3]), cue)
         }
         _ => {
             return Err(invalid(
@@ -91,7 +104,15 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         None => None,
     };
     let boot = BootId::new(BOOT_BYTES).map_err(|e| invalid(&format!("{e:?}")))?;
-    let mut cues = match cue_path {
+    // Only explicit fake fault tests interpose a bounded local datagram shim.
+    // Nominal tests use the production CueSink directly, including directed mode.
+    let mut fault_relay = match (&cue_path, cue_fault) {
+        (Some(path), Some(fault)) => Some(FaultRelay::new(&output, path, fault)?),
+        (None, Some(_)) => return Err(invalid("fake cue fault requires a cue socket")),
+        _ => None,
+    };
+    let sink_path = fault_relay.as_ref().map(|f| f.path.clone()).or(cue_path);
+    let mut cues = match sink_path {
         Some(path) => {
             let mut sink = CueSink::connect(&path)?;
             sink.set_boot(boot);
@@ -144,6 +165,9 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         if let Some(sink) = cues.as_mut() {
             let _ = sink.scan(&trace, monotonic_us());
         }
+        if let Some(relay) = fault_relay.as_mut() {
+            relay.tick(monotonic_us())?;
+        }
         if let Some(socket) = &room {
             while let Ok(count) = socket.recv(&mut buffer) {
                 let timing: SceneTiming = serde_json::from_slice(&buffer[..count])?;
@@ -168,4 +192,68 @@ pub fn run(arguments: &[String]) -> Result<i32> {
         let _ = fs::remove_file(path);
     }
     Ok(if failed { 1 } else { 0 })
+}
+
+/// One deliberately dropped or late production cue; no audio or external I/O.
+/// The 150 ms delay leaves the original event/send/100 ms expiry untouched.
+struct FaultRelay {
+    input: UnixDatagram,
+    output: UnixDatagram,
+    path: PathBuf,
+    fault: String,
+    used: bool,
+    pending: Option<(u64, Vec<u8>)>,
+}
+impl FaultRelay {
+    fn new(directory: &Path, target: &Path, fault: String) -> Result<Self> {
+        let path = directory.join("fault.sock");
+        let input = UnixDatagram::bind(&path)?;
+        input.set_nonblocking(true)?;
+        let output = UnixDatagram::unbound()?;
+        output.set_nonblocking(true)?;
+        output.connect(target)?;
+        Ok(Self {
+            input,
+            output,
+            path,
+            fault,
+            used: false,
+            pending: None,
+        })
+    }
+    fn send(&self, bytes: &[u8]) -> Result<()> {
+        if self.output.send(bytes)? != bytes.len() {
+            return Err(invalid("partial fake cue relay send"));
+        }
+        Ok(())
+    }
+    fn tick(&mut self, now_us: u64) -> Result<()> {
+        if self.pending.as_ref().is_some_and(|(due, _)| now_us >= *due) {
+            let (_, bytes) = self.pending.take().expect("pending delay checked");
+            self.send(&bytes)?;
+        }
+        let mut bytes = [0_u8; 513];
+        for _ in 0..64 {
+            let count = match self.input.recv(&mut bytes) {
+                Ok(count) => count,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(error.into()),
+            };
+            let cue = crate::events::parse_cue(&bytes[..count])?;
+            if !self.used && cue.kind == "speech_retired" {
+                self.used = true;
+                if self.fault == "stale-retirement" {
+                    self.pending = Some((now_us + 150_000, bytes[..count].to_vec()));
+                }
+            } else {
+                self.send(&bytes[..count])?;
+            }
+        }
+        Ok(())
+    }
+}
+impl Drop for FaultRelay {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }

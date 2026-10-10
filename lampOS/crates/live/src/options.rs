@@ -88,6 +88,39 @@ impl DirectedOptions {
     }
 }
 
+/// Optional observation of a finite conversation. Cues contain lifecycle
+/// metadata only; enabling them does not enable microphone PCM diagnostics.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SessionOptions {
+    pub directed: DirectedOptions,
+    pub cue_socket: Option<PathBuf>,
+}
+impl SessionOptions {
+    pub fn parse(arguments: &[String]) -> io::Result<Self> {
+        let mut remaining = Vec::new();
+        let mut cue_socket = None;
+        let mut arguments = arguments.iter();
+        while let Some(argument) = arguments.next() {
+            if argument == "--cue-socket" {
+                if cue_socket.is_some() {
+                    return Err(invalid_options());
+                }
+                let path = PathBuf::from(required_value(&mut arguments)?);
+                if !path.is_absolute() {
+                    return Err(invalid_options());
+                }
+                cue_socket = Some(path);
+            } else {
+                remaining.push(argument.clone());
+            }
+        }
+        Ok(Self {
+            directed: DirectedOptions::parse(&remaining)?,
+            cue_socket,
+        })
+    }
+}
+
 /// Internal child CLI: only named options can identify mode or diagnostic path.
 /// Parsing finishes before IPC binding, recorder creation or device opening.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -176,6 +209,43 @@ mod tests {
             serde_json::to_value(options.noise_suppression.software_processing()).unwrap(),
             serde_json::json!({"aec":"sonora_aec3","noise_suppression":true})
         );
+    }
+    #[test]
+    fn session_cues_are_optional_metadata_without_enabling_audio_recording() {
+        assert_eq!(
+            SessionOptions::parse(&[]).unwrap(),
+            SessionOptions::default()
+        );
+        let options = SessionOptions::parse(&args(&[
+            "--cue-socket",
+            "/tmp/private session/cue.sock",
+            "--noise-suppression",
+            "off",
+            "--ring-channel-ceiling",
+            "24",
+        ]))
+        .unwrap();
+        assert_eq!(
+            options.cue_socket,
+            Some(PathBuf::from("/tmp/private session/cue.sock"))
+        );
+        assert_eq!(options.directed.noise_suppression, NoiseSuppression::Off);
+        assert_eq!(options.directed.ring_channel_ceiling, Some(24));
+        assert!(!options.directed.diagnostics);
+    }
+    #[test]
+    fn session_cues_reject_missing_duplicate_relative_and_flag_values() {
+        for values in [
+            vec!["--cue-socket"],
+            vec!["--cue-socket", ""],
+            vec!["--cue-socket", "relative.sock"],
+            vec!["--cue-socket", "--diagnostics"],
+            vec!["--cue-socket", "/tmp/a", "--cue-socket", "/tmp/b"],
+            vec!["--cue-socket", "/tmp/a", "--unknown"],
+            vec!["--cue-socket", "/tmp/a", "--noise-suppression", "yes"],
+        ] {
+            assert!(SessionOptions::parse(&args(&values)).is_err(), "{values:?}");
+        }
     }
     #[test]
     fn ring_is_explicit_bounded_and_independent_of_audio_treatment() {

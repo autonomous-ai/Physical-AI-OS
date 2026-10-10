@@ -1,7 +1,7 @@
 //! Opt-in, one-reply offline provider for finite acoustic experiments.
 //! This supplies PCM, never interaction authority, speaker permits, or a score.
 use crate::{
-    options::DirectedOptions,
+    options::{DirectedOptions, SessionOptions},
     provider_flow::{MAX_REPLY_SAMPLES, OutputSender, PACKET_SAMPLES},
     provider_worker::{ProviderInput, ProviderOutput},
     transport::{Channel, WorkerChannels},
@@ -141,24 +141,10 @@ pub struct FixtureOptions {
 }
 impl FixtureOptions {
     pub fn parse(arguments: &[String]) -> io::Result<Self> {
-        let mut remaining = Vec::new();
-        let mut cue_socket = None;
-        let mut arguments = arguments.iter();
-        while let Some(value) = arguments.next() {
-            if value == "--cue-socket" {
-                if cue_socket.is_some() {
-                    return Err(invalid("duplicate cue socket"));
-                }
-                cue_socket = Some(PathBuf::from(
-                    arguments
-                        .next()
-                        .ok_or_else(|| invalid("missing cue socket"))?,
-                ));
-            } else {
-                remaining.push(value.clone());
-            }
-        }
-        let directed = DirectedOptions::parse(&remaining)?;
+        let SessionOptions {
+            directed,
+            cue_socket,
+        } = SessionOptions::parse(arguments)?;
         if !directed.diagnostics {
             return Err(invalid(
                 "fixture experiments require explicit --diagnostics",
@@ -649,13 +635,15 @@ pub fn run(mut channels: WorkerChannels, boot: BootId, wav: &Path, sha256: &str)
 #[serde(rename_all = "snake_case")]
 pub enum CueKind {
     ListeningReady,
+    InputAdmitted,
+    LocalEndpoint,
     SpeakerFirstWrite,
     Cancelled,
     SpeechRetired,
     RunEnd,
 }
 #[derive(Serialize)]
-struct Cue {
+struct Cue<'a> {
     schema: u8,
     sequence: u64,
     kind: CueKind,
@@ -667,6 +655,8 @@ struct Cue {
     event_us: u64,
     sent_us: u64,
     expires_us: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'a str>,
 }
 struct FixedBytes {
     bytes: [u8; CUE_MAX_BYTES],
@@ -757,6 +747,8 @@ impl CueSink {
                     self.reference_epoch = event["details"]["playback_epoch"].as_u64()
                 }
                 Some("listening_ready") => self.emit(CueKind::ListeningReady, event, sent_us),
+                Some("input_admitted") => self.emit(CueKind::InputAdmitted, event, sent_us),
+                Some("local_endpoint") => self.emit(CueKind::LocalEndpoint, event, sent_us),
                 Some("speaker_first_write") => {
                     self.emit(CueKind::SpeakerFirstWrite, event, sent_us)
                 }
@@ -805,6 +797,11 @@ impl CueSink {
                 event_us,
                 sent_us,
                 expires_us,
+                reason: if matches!(kind, CueKind::Cancelled) {
+                    event["outcome"].as_str()
+                } else {
+                    None
+                },
             };
             let mut bytes = FixedBytes {
                 bytes: [0; CUE_MAX_BYTES],

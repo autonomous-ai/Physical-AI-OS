@@ -518,6 +518,85 @@ fn cues_are_bounded_ordered_fresh_and_keep_owner_epoch_context() {
 }
 
 #[test]
+fn conversation_cues_preserve_turns_endpoints_and_cancellation_reasons() {
+    let private = Private::new();
+    let (peer, mut sink) = bound_cue(&private);
+    let trace = vec![
+        json!({"kind":"input_admitted","at_us":AT,"turn":9,"owner":{"generation":11}}),
+        json!({"kind":"local_endpoint","at_us":AT+1,"turn":9,"owner":{"generation":11}}),
+        json!({"kind":"turn_finished","at_us":AT+2,"turn":9,"owner":{"generation":11},"outcome":"user_interrupted"}),
+        json!({"kind":"input_admitted","at_us":AT+3,"turn":10,"owner":{"generation":12}}),
+        // Normal completion is not a cancellation and must not become one.
+        json!({"kind":"turn_finished","at_us":AT+4,"turn":10,"outcome":"audio_written_unscored"}),
+    ];
+    assert_eq!(sink.scan(&trace, AT + 5), None);
+    let mut bytes = [0; CUE_MAX_BYTES];
+    for (index, kind) in [
+        "input_admitted",
+        "local_endpoint",
+        "cancelled",
+        "input_admitted",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let count = peer.recv(&mut bytes).unwrap();
+        let cue: Value = serde_json::from_slice(&bytes[..count]).unwrap();
+        assert_eq!(cue["sequence"], index + 1);
+        assert_eq!(cue["kind"], *kind);
+        assert_eq!(cue["event_us"], AT + index as u64);
+        assert_eq!(cue["turn"], if index == 3 { 10 } else { 9 });
+        assert_eq!(cue["generation"], if index == 3 { 12 } else { 11 });
+        assert_eq!(
+            cue["reason"],
+            if index == 2 {
+                json!("user_interrupted")
+            } else {
+                Value::Null
+            }
+        );
+    }
+    assert_eq!(
+        peer.recv(&mut bytes).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn cue_event_to_peer_receipt_latency_is_reported_with_a_bounded_send_path() {
+    let private = Private::new();
+    let (peer, mut sink) = bound_cue(&private);
+    let mut trace = Vec::new();
+    let mut elapsed = Vec::new();
+    let mut bytes = [0; CUE_MAX_BYTES];
+    for turn in 1..=200_u64 {
+        let at = lamp_ipc::monotonic_us();
+        trace.push(
+            json!({"kind":"input_admitted","at_us":at,"turn":turn,"owner":{"generation":turn+1}}),
+        );
+        assert_eq!(sink.scan(&trace, lamp_ipc::monotonic_us()), None);
+        let count = peer.recv(&mut bytes).unwrap();
+        let received = lamp_ipc::monotonic_us();
+        let cue: Value = serde_json::from_slice(&bytes[..count]).unwrap();
+        assert_eq!(cue["sequence"], turn);
+        assert!(received < cue["expires_us"].as_u64().unwrap());
+        elapsed.push(received - at);
+    }
+    let first = elapsed[0];
+    elapsed.sort_unstable();
+    let p50 = elapsed[99];
+    let p95 = elapsed[189];
+    eprintln!(
+        "cue_local_socket_only n=200 first_us={first} p50_us={p50} p95_us={p95} max_us={}; excludes coordinator scheduling, relay, acoustic and device paths",
+        elapsed[199]
+    );
+    assert!(
+        p95 < 2_000,
+        "local cue observation missed the 2 ms p95 host target: {p95}"
+    );
+}
+
+#[test]
 fn stale_cue_and_peer_loss_latch_invalid_without_blocking_or_retrying() {
     let private = Private::new();
     let (peer, mut sink) = bound_cue(&private);
@@ -694,7 +773,7 @@ fn maximal_cue_fields_fit_the_fixed_datagram_without_truncation() {
     let trace = vec![
         json!({"kind":"capture_started","details":{"epoch":u64::MAX}}),
         json!({"kind":"reference_clock","details":{"playback_epoch":u64::MAX}}),
-        json!({"kind":"speaker_first_write","at_us":event_us,"turn":u64::MAX,"owner":{"generation":u64::MAX}}),
+        json!({"kind":"turn_finished","at_us":event_us,"turn":u64::MAX,"owner":{"generation":u64::MAX},"outcome":"input_discontinuity"}),
     ];
     assert_eq!(sink.scan(&trace, event_us + 1), None);
     let mut data = [0; CUE_MAX_BYTES];
@@ -702,6 +781,7 @@ fn maximal_cue_fields_fit_the_fixed_datagram_without_truncation() {
     let parsed: Value = serde_json::from_slice(&data[..count]).unwrap();
     assert_eq!(parsed["turn"], u64::MAX);
     assert_eq!(parsed["expires_us"], event_us + 100_000);
+    assert_eq!(parsed["reason"], "input_discontinuity");
 }
 
 fn channel_pair(private: &Private) -> (WorkerChannels, WorkerChannels) {

@@ -6,14 +6,14 @@
 //! are not acoustic onsets. Room audio comes from a separate recorder.
 use crate::{
     Result,
-    events::{ClockDomain, EventKind, EventSource, RuntimeEvent, from_trace, parse_cue},
+    events::{ClockDomain, Cue, EventKind, EventSource, RuntimeEvent, from_trace, parse_cue},
     import::load_room_evidence,
     invalid,
     physical::{
         fake_lamp::ROOM_MAX_BYTES,
         protocol::{RunnerLine, SessionLine},
     },
-    plan::{ProviderKind, Scenario, Step, TriggerEvent},
+    plan::{ProviderKind, Scenario, Step},
     record::{ClockMapping, StimulusSource, Stratum},
     runner::{AttemptContext, Backend, Begin, Finished, Injection},
     stimulus::{AssetIndex, SceneTiming, StimulusCatalog},
@@ -21,6 +21,7 @@ use crate::{
 use lamp_ipc::monotonic_us;
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixDatagram,
@@ -176,6 +177,84 @@ pub struct PhysicalConfig {
 const PING_INTERVAL_US: u64 = 250_000;
 const MAX_PINGS: u64 = 400;
 
+/// Scheduling identity only; this never changes Lamp conversation authority.
+#[derive(Default)]
+struct CueOrder {
+    boot: Option<[u8; 16]>,
+    sequence: u64,
+    sent_us: u64,
+    owners: BTreeMap<u64, CueOwner>,
+    ended: bool,
+}
+struct CueOwner {
+    generation: u64,
+    endpoint: bool,
+    playback: bool,
+    retired: bool,
+    cancelled: bool,
+}
+impl CueOrder {
+    fn accept(&mut self, cue: &Cue, lamp_received_us: u64) -> Result<()> {
+        if lamp_received_us < cue.sent_us || lamp_received_us >= cue.expires_us {
+            return Err(invalid("stale/future cue at Lamp relay"));
+        }
+        if self.ended
+            || self.sequence.checked_add(1) != Some(cue.sequence)
+            || self.boot.is_some_and(|boot| boot != cue.boot)
+            || cue.sent_us < self.sent_us
+        {
+            return Err(invalid("cue boot/sequence/time order changed"));
+        }
+        if let (Some(turn), Some(generation)) = (cue.turn, cue.generation) {
+            if cue.kind == "input_admitted" {
+                if self
+                    .owners
+                    .last_key_value()
+                    .is_some_and(|(&old, state)| turn <= old || generation <= state.generation)
+                {
+                    return Err(invalid("cue admission did not advance its owner"));
+                }
+                self.owners.insert(
+                    turn,
+                    CueOwner {
+                        generation,
+                        endpoint: false,
+                        playback: false,
+                        retired: false,
+                        cancelled: false,
+                    },
+                );
+            } else {
+                let owner = self
+                    .owners
+                    .get_mut(&turn)
+                    .ok_or_else(|| invalid("cue owner has no admitted input"))?;
+                if owner.generation != generation || owner.cancelled {
+                    return Err(invalid("cue relabeled or revived a terminal owner"));
+                }
+                match cue.kind.as_str() {
+                    "local_endpoint" if !owner.endpoint && !owner.playback => owner.endpoint = true,
+                    "speaker_first_write"
+                        if owner.endpoint && !owner.playback && !owner.retired =>
+                    {
+                        owner.playback = true
+                    }
+                    "speech_retired" if owner.playback && !owner.retired => owner.retired = true,
+                    // Playback can retire before the provider finishes. A later
+                    // cancellation of that same owner remains a real event.
+                    "cancelled" => owner.cancelled = true,
+                    _ => return Err(invalid("cue phase out of order or duplicated")),
+                }
+            }
+        }
+        self.boot = Some(cue.boot);
+        self.sequence = cue.sequence;
+        self.sent_us = cue.sent_us;
+        self.ended = cue.kind == "run_end";
+        Ok(())
+    }
+}
+
 struct Session {
     child: Child,
     next_ping_us: u64,
@@ -189,6 +268,10 @@ struct Session {
     end_synthesized: bool,
     ready_seen: bool,
     protocol_errors: Vec<String>,
+    start: Option<Value>,
+    cues: Vec<Value>,
+    cue_order: CueOrder,
+    cue_failed: bool,
 }
 
 struct Playback {
@@ -207,6 +290,23 @@ pub struct PhysicalBackend<'a> {
     playbacks: Vec<Playback>,
     attempt_directory: Option<PathBuf>,
     seconds: u16,
+}
+
+/// End scheduling immediately, retaining the actual trace at finish. This is a
+/// runner-generated protocol stop, not a Lamp failure or an acoustic event.
+fn cue_failure(session: &mut Session, reason: String, received_us: u64) -> RuntimeEvent {
+    session.cue_failed = true;
+    session.protocol_errors.push(reason.clone());
+    RuntimeEvent::new(
+        EventKind::RunEnd {
+            status: Some("cue_protocol_invalid".into()),
+            error: Some(reason),
+        },
+        None,
+        received_us,
+        ClockDomain::RunnerMonotonic,
+        EventSource::Cue,
+    )
 }
 
 impl<'a> PhysicalBackend<'a> {
@@ -282,39 +382,62 @@ impl<'a> PhysicalBackend<'a> {
                 lamp_received_us,
                 cue,
             } => {
-                let bytes = serde_json::to_vec(&cue).ok()?;
-                match parse_cue(&bytes) {
-                    // A cue the relay itself received after its expiry is stale;
-                    // acting on it would start the stimulus at the wrong phase.
-                    Ok(cue) if lamp_received_us > cue.expires_us => {
-                        session.protocol_errors.push(format!(
-                            "stale {} cue relayed {} us after expiry",
-                            cue.kind,
-                            lamp_received_us - cue.expires_us
-                        ));
-                        return None;
+                if session.cue_failed {
+                    return None;
+                }
+                let result = (|| -> Result<Cue> {
+                    if session.start.is_none() {
+                        return Err(invalid("cue arrived without relay capability receipt"));
                     }
+                    if session.cues.len() >= crate::physical::protocol::MAX_TRACE_LINES {
+                        return Err(invalid("cue receipt limit exceeded"));
+                    }
+                    let parsed = parse_cue(&serde_json::to_vec(&cue)?)?;
+                    // The Lamp relay validates local receipt; a clock map also
+                    // rejects cues that expired while crossing the transport.
+                    // The upper uncertainty bound must still be before expiry.
+                    if let Some(map) = &session.best {
+                        let upper_lamp_us = i128::from(received)
+                            + i128::from(map.offset_us)
+                            + i128::from(map.uncertainty_us);
+                        if upper_lamp_us >= i128::from(parsed.expires_us) {
+                            return Err(invalid(
+                                "stale cue at runner (including clock uncertainty)",
+                            ));
+                        }
+                    } else if parsed.turn.is_some() {
+                        return Err(invalid("owned cue has no clock mapping to prove freshness"));
+                    }
+                    session.cue_order.accept(&parsed, lamp_received_us)?;
+                    Ok(parsed)
+                })();
+                if session.cues.len() < crate::physical::protocol::MAX_TRACE_LINES {
+                    session
+                        .cues
+                        .push(json!({"cue": cue, "lamp_received_us": lamp_received_us,
+                        "runner_received_us": received, "accepted": result.is_ok(),
+                        "error": result.as_ref().err().map(ToString::to_string)}));
+                }
+                match result {
                     Ok(cue) => cue.event()?,
-                    Err(error) => {
-                        session
-                            .protocol_errors
-                            .push(format!("invalid cue: {error}"));
-                        return None;
-                    }
+                    Err(error) => cue_failure(session, error.to_string(), received),
                 }
             }
             SessionLine::CueInvalid { error, .. } => {
-                session
-                    .protocol_errors
-                    .push(format!("relay rejected a cue: {error}"));
-                return None;
+                if session.cue_failed {
+                    return None;
+                }
+                cue_failure(session, format!("relay rejected a cue: {error}"), received)
             }
             SessionLine::Stdout {
                 lamp_received_us,
                 line,
             } => {
                 let status: Value = serde_json::from_str(&line).ok()?;
-                if status["status"] != "listening_ready" {
+                if session.cue_failed
+                    || session.start.is_none()
+                    || status["status"] != "listening_ready"
+                {
                     return None;
                 }
                 if std::mem::replace(&mut session.ready_seen, true) {
@@ -339,7 +462,7 @@ impl<'a> PhysicalBackend<'a> {
                     unreachable!()
                 };
                 session.end = Some(end);
-                // Directed mode has no run_end cue; the session end closes the attempt.
+                // The authoritative relay end also closes attempts whose end cue was lost.
                 RuntimeEvent::new(
                     EventKind::RunEnd {
                         status: None,
@@ -351,9 +474,37 @@ impl<'a> PhysicalBackend<'a> {
                     EventSource::Stdout,
                 )
             }
-            SessionLine::SessionStart { .. } => return None,
+            start @ SessionLine::SessionStart { .. } => {
+                let SessionLine::SessionStart {
+                    schema,
+                    ref mode,
+                    cue_socket,
+                    ..
+                } = start
+                else {
+                    unreachable!()
+                };
+                let expected = match self.config.mode {
+                    LampMode::Fixture { .. } => "fixture",
+                    LampMode::Directed { .. } => "directed",
+                };
+                if session.start.is_some()
+                    || schema != crate::physical::protocol::SCHEMA
+                    || mode != expected
+                    || !cue_socket
+                {
+                    cue_failure(
+                        session,
+                        "relay did not establish the requested cue capability".into(),
+                        received,
+                    )
+                } else {
+                    session.start = Some(serde_json::to_value(start).ok()?);
+                    return None;
+                }
+            }
         };
-        // Fixture mode reports readiness on both stdout and the cue socket.
+        // Both modes report readiness on stdout and the cue socket.
         if matches!(event.kind, EventKind::ListeningReady)
             && event.source == EventSource::Cue
             && std::mem::replace(&mut session.ready_seen, true)
@@ -435,7 +586,7 @@ impl Backend for PhysicalBackend<'_> {
             "kind": "physical",
             "mode": match &self.config.mode {
                 LampMode::Fixture { sha256, .. } => json!({"provider": "fixed_reply", "reply_sha256": sha256}),
-                LampMode::Directed { .. } => json!({"provider": "gemini", "cues": "unavailable: lamp-live directed emits no cue socket (proposal P1)"}),
+                LampMode::Directed { .. } => json!({"provider": "gemini", "cues": "schema-1 socket required; software scheduling only"}),
             },
             "stimulus_source": self.config.stimulus_source,
             "noise_suppression": self.config.noise_suppression,
@@ -468,14 +619,6 @@ impl Backend for PhysicalBackend<'_> {
             }
             (LampMode::Directed { .. }, ProviderKind::FixedReply) => {
                 return Some("fixed-reply scenario needs lamp-live directed-fixture".into());
-            }
-            (LampMode::Directed { .. }, ProviderKind::Gemini)
-                if scenario
-                    .steps
-                    .iter()
-                    .any(|s| s.trigger.after != TriggerEvent::ListeningReady) =>
-            {
-                return Some("event-triggered steps need runtime cues, which lamp-live directed does not emit yet (proposal P1); no fixed-delay fallback".into());
             }
             _ => {}
         }
@@ -591,6 +734,10 @@ impl Backend for PhysicalBackend<'_> {
             end_synthesized: false,
             ready_seen: false,
             protocol_errors: Vec::new(),
+            start: None,
+            cues: Vec::new(),
+            cue_order: CueOrder::default(),
+            cue_failed: false,
         });
         self.send_ping(1)?;
         fs::write(
@@ -740,6 +887,11 @@ impl Backend for PhysicalBackend<'_> {
         let exited = wait_child(&mut session.child, monotonic_us() + 5_000_000);
         // A partial trace must never be scored as a complete one.
         let aborted = match &session.end {
+            _ if !session.protocol_errors.is_empty() => Some(format!(
+                "invalid scheduling/transport evidence: {}",
+                session.protocol_errors.join("; ")
+            )),
+            _ if session.start.is_none() => Some("no relay cue capability receipt".into()),
             None => Some(
                 "lamp session did not report its end within the bound; transport killed".to_owned(),
             ),
@@ -808,7 +960,9 @@ impl Backend for PhysicalBackend<'_> {
             }
         }
         let evidence = json!({
+            "session_start": session.start,
             "session_end": session.end,
+            "cue_receipts": session.cues,
             "transport_exit": exited.map(|s| s.code()),
             "protocol_errors": session.protocol_errors,
             "playbacks": playbacks,
@@ -832,5 +986,100 @@ impl Backend for PhysicalBackend<'_> {
             "cargo run -p lamp-voice-eval -- physical-run --scenario {} --attempt-seed {} (with the same physical options as run {})",
             context.scenario.id, context.seed, context.run_id
         )
+    }
+}
+
+#[cfg(test)]
+mod cue_tests {
+    use super::*;
+
+    fn cue(sequence: u64, kind: &str, turn: u64) -> Cue {
+        Cue {
+            schema: 1,
+            sequence,
+            kind: kind.into(),
+            boot: [7; 16],
+            turn: Some(turn),
+            generation: Some(turn + 1),
+            capture_epoch: Some(1),
+            reference_epoch_context: Some(1),
+            event_us: sequence * 10,
+            sent_us: sequence * 10 + 1,
+            expires_us: sequence * 10 + 100_000,
+            reason: None,
+        }
+    }
+    #[test]
+    fn cue_order_rejects_missing_duplicate_relabelled_and_out_of_order_owners() {
+        let mut order = CueOrder::default();
+        order.accept(&cue(1, "input_admitted", 1), 12).unwrap();
+        for bad in [
+            cue(1, "input_admitted", 1),
+            cue(3, "local_endpoint", 1),
+            cue(2, "local_endpoint", 2),
+            cue(2, "speech_retired", 1),
+        ] {
+            assert!(order.accept(&bad, 40).is_err(), "{bad:?}");
+        }
+        let mut bad_boot = cue(2, "local_endpoint", 1);
+        bad_boot.boot = [8; 16];
+        assert!(order.accept(&bad_boot, 25).is_err());
+        let mut relabel = cue(2, "local_endpoint", 1);
+        relabel.generation = Some(9);
+        assert!(order.accept(&relabel, 25).is_err());
+        order.accept(&cue(2, "local_endpoint", 1), 25).unwrap();
+        order.accept(&cue(3, "speaker_first_write", 1), 35).unwrap();
+        order.accept(&cue(4, "cancelled", 1), 45).unwrap();
+        order.accept(&cue(5, "input_admitted", 2), 55).unwrap();
+        assert!(order.accept(&cue(6, "speech_retired", 1), 65).is_err());
+    }
+    #[test]
+    fn cue_receipt_at_expiry_or_before_send_is_not_fresh() {
+        for received in [10, 100010] {
+            assert!(
+                CueOrder::default()
+                    .accept(&cue(1, "input_admitted", 1), received)
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn retired_audio_can_be_cancelled_without_reviving_playback() {
+        let mut order = CueOrder::default();
+        for (index, kind) in [
+            "input_admitted",
+            "local_endpoint",
+            "speaker_first_write",
+            "speech_retired",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let c = cue(index as u64 + 1, kind, 1);
+            order.accept(&c, c.sent_us + 1).unwrap();
+        }
+        assert!(order.accept(&cue(5, "speech_retired", 1), 55).is_err());
+        assert!(order.accept(&cue(5, "speaker_first_write", 1), 55).is_err());
+        order.accept(&cue(5, "cancelled", 1), 55).unwrap();
+        assert!(order.accept(&cue(6, "cancelled", 1), 65).is_err());
+        order.accept(&cue(6, "input_admitted", 2), 65).unwrap();
+        assert!(order.accept(&cue(7, "speaker_first_write", 1), 75).is_err());
+    }
+
+    #[test]
+    fn fresh_delayed_child_observation_keeps_its_earlier_event_time() {
+        let mut order = CueOrder::default();
+        order.accept(&cue(1, "input_admitted", 1), 12).unwrap();
+        order.accept(&cue(2, "local_endpoint", 1), 22).unwrap();
+        let mut observed = cue(3, "speaker_first_write", 1);
+        // Child observation and coordinator event times are not a global
+        // ordered clock: only the producer's send/sequence order is promised.
+        observed.event_us = 19;
+        observed.expires_us = 100019;
+        order.accept(&observed, 32).unwrap();
+        assert_eq!(observed.event().unwrap().at_us, Some(19));
+        let mut regressed_send = cue(4, "speech_retired", 1);
+        regressed_send.sent_us = 30;
+        assert!(order.accept(&regressed_send, 42).is_err());
     }
 }

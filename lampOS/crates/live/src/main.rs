@@ -48,8 +48,8 @@ fn run() -> Result<()> {
         }
         #[cfg(target_os = "linux")]
         [command, config, seconds, output, flags @ ..] if command == "directed" => {
-            let options = lamp_live::options::DirectedOptions::parse(flags)?;
-            lamp_live::coordinator::run_directed_with_options(Path::new(config), seconds.parse()?, Path::new(output), options)?;
+            let options = lamp_live::options::SessionOptions::parse(flags)?;
+            lamp_live::coordinator::run_directed_session(Path::new(config), seconds.parse()?, Path::new(output), options)?;
         }
         #[cfg(target_os = "linux")]
         [command, role, dir, parent, worker, device, flags @ ..]
@@ -89,7 +89,7 @@ fn run() -> Result<()> {
                 _=>return Err(io::Error::other("worker is not integrated yet").into()),
             }
         },
-        _=>return Err(io::Error::new(io::ErrorKind::InvalidInput,"usage: lamp-live camera-inspect PRIVATE_CAMERA_CONFIG.json SECONDS NEW_REPORT.json | provider-check PRIVATE_CONFIG.json | directed PRIVATE_CONFIG.json SECONDS NEW_OUTPUT [--diagnostics] [--noise-suppression on|off] [--ring-channel-ceiling 0..120] | directed-fixture REPLY.wav SHA256 SECONDS NEW_OUTPUT --diagnostics [--noise-suppression on|off] [--cue-socket ABS_PATH] [--ring-channel-ceiling 0..120] | worker ROLE DIR CONTROLLER_BOOT WORKER_BOOT").into()),
+        _=>return Err(io::Error::new(io::ErrorKind::InvalidInput,"usage: lamp-live camera-inspect PRIVATE_CAMERA_CONFIG.json SECONDS NEW_REPORT.json | provider-check PRIVATE_CONFIG.json | directed PRIVATE_CONFIG.json SECONDS NEW_OUTPUT [--diagnostics] [--noise-suppression on|off] [--cue-socket ABS_PATH] [--ring-channel-ceiling 0..120] | directed-fixture REPLY.wav SHA256 SECONDS NEW_OUTPUT --diagnostics [--noise-suppression on|off] [--cue-socket ABS_PATH] [--ring-channel-ceiling 0..120] | worker ROLE DIR CONTROLLER_BOOT WORKER_BOOT").into()),
     }
     Ok(())
 }
