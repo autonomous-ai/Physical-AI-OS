@@ -14,6 +14,22 @@ All tracking code lives in the `hal/drivers/tracking/` package:
 | `filters.py` | `AlphaBetaFilter2D`, `PID`, `smooth_damp`, `soft_deadband` |
 | `frame_utils.py` | `downscale`, `scale_bbox` (coordinate mapping) |
 
+### Overlapping camera freeze ownership
+
+Snapshots (`capture_still`), sensing captures and tracker initialization share a
+per-motion-service freeze lease (`hal/drivers/motors/freeze_lease.py`). The first
+consumer freezes motion; only the last consumer to exit unfreezes it. Exceptions
+and early returns release that caller's lease, including camera consumer setup
+or cleanup errors. A failed freeze acquires no lease; snapshots retain their
+existing best-effort capture behavior when freezing fails.
+
+Only ownership transitions are locked. Frame acquisition, settle waits and
+object detection can overlap; no extra timer, sleep or network call is added.
+Existing settle/timeout settings remain unchanged. New camera callers must use
+the shared lease instead of calling driver `freeze()` / `unfreeze()` directly.
+This coordinates the existing freeze mechanism; it does not change driver motion
+policies or introduce a global motion choreographer.
+
 ## Voice intent routing
 
 Unmatched voice requests can use the OS Jev fallback to select `servo_track`

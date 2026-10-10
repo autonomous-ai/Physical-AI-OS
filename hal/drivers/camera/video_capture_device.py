@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import logging
 import os
 import threading
@@ -7,6 +8,8 @@ from typing import cast, override
 import cv2
 import numpy as np
 import numpy.typing as npt
+
+from hal.drivers.motors.freeze_lease import freeze_lease
 
 from .base import IDevice
 from .models import VideoCaptureDeviceInfo, VideoCaptureDeviceResponse
@@ -707,15 +710,14 @@ def capture_still(
     """
     if cap is None:
         return None
-    frozen = False
-    if animation_service is not None:
-        try:
-            animation_service.freeze()
-            frozen = True
-        except Exception:
-            pass
-    cap.acquire_consumer()
-    try:
+    with ExitStack() as cleanup:
+        if animation_service is not None:
+            try:
+                cleanup.enter_context(freeze_lease(animation_service))
+            except Exception:
+                pass
+        cap.acquire_consumer()
+        cleanup.callback(cap.release_consumer)
         entry = time.monotonic()
         deadline = entry + max(timeout_s, 0.05)
         min_fresh = entry - 0.15
@@ -733,7 +735,3 @@ def capture_still(
             if time.monotonic() >= deadline:
                 return cap.last_frame
             time.sleep(0.03)
-    finally:
-        cap.release_consumer()
-        if frozen:
-            animation_service.unfreeze()
