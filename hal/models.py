@@ -11,6 +11,15 @@ class ServoRequest(BaseModel):
     model_config = {"json_schema_extra": {"examples": [{"recording": "curious"}]}}
 
 
+class ServoContactLearnRequest(BaseModel):
+    """Learn run for the contact stop's per-frame load envelope (arm must move free)."""
+
+    recordings: Optional[list[str]] = Field(
+        None, description="Recordings to learn; default every recording except music_*."
+    )
+    runs: int = Field(2, ge=1, le=5, description="Free plays per recording; the envelope keeps the max.")
+
+
 class ServoStateResponse(BaseModel):
     available_recordings: list[str]
     current: Optional[str]
@@ -620,6 +629,9 @@ class HealthResponse(BaseModel):
     display: bool
     # null when no `thermal` bound is declared; else {over, temp_c, max_temp_c}.
     thermal: Optional[dict] = None
+    # null when the motion driver has no overload cut-off; else {active, retry_in_s,
+    # threshold, hold_s, retry_s, trips, cut_complete, pending_off, last_trip, load, peak}.
+    servo_overload: Optional[dict] = None
 
 
 class ServoMoveRequest(BaseModel):

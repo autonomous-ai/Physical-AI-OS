@@ -17,6 +17,7 @@ from hal.drivers.motors import hold
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
+    ServoContactLearnRequest,
     ServoHoldOwnerRequest,
     ServoDemoResponse,
     ServoSearchRequest,
@@ -393,6 +394,26 @@ def stop_servos():
             state.logger.warning(f"tracker stop during halt failed: {e}")
     svc = _svc_connected()
     svc.halt()
+    return {"status": "ok"}
+
+
+@router.post("/servo/contact/learn", response_model=StatusResponse)
+def learn_contact_profile(req: ServoContactLearnRequest):
+    """Start the contact stop's learn run in the background; progress is on /health.
+
+    Clear the space around the arm first: whatever it touches is learned as normal.
+    """
+    svc = _svc_connected()
+    learn = getattr(svc, "learn_contact_profile", None)
+    if learn is None:
+        raise HTTPException(409, "This motion driver has no contact profile")
+    recordings = req.recordings or [
+        r for r in svc.get_available_recordings() if not r.startswith("music_")
+    ]
+    try:
+        learn(recordings, req.runs)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
     return {"status": "ok"}
 
 

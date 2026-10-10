@@ -71,6 +71,12 @@ class LeLampFollower(Robot):
         # AnimationService.move_to_raw stamps it too (bypasses send_action).
         self.last_write_monotonic: float = 0.0
 
+        # Set by AnimationService while its overload cut-off holds the servos limp
+        # (a Goal_Position write re-engages torque on these servos) or its contact
+        # stop holds the arm still after a hit, so send_action drops goals instead of
+        # writing them.
+        self.goal_writes_blocked: bool = False
+
     @property
     def _motors_ft(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.bus.motors}
@@ -216,6 +222,9 @@ class LeLampFollower(Robot):
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        if self.goal_writes_blocked:
+            return {}
 
         goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
 

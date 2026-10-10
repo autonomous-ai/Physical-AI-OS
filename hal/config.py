@@ -840,6 +840,11 @@ DEFAULT_USER: str = os.environ.get("HAL_DEFAULT_USER", "unknown")
 USER_BEARING_PATH: str = os.environ.get(
     "HAL_USER_BEARING_PATH", "/var/lib/hal/user_bearing.json"
 )
+# Learned per-frame servo load envelope for the contact stop (per unit, like a
+# calibration); survives reboots and OTA. Re-learn after recalibrating the arm.
+CONTACT_PROFILE_PATH: str = os.environ.get(
+    "HAL_CONTACT_PROFILE_PATH", "/var/lib/hal/contact_profile.json"
+)
 # Owner's resting LED choice from the web UI; survives reboots and OTA.
 RESTING_LED_PATH: str = os.environ.get(
     "HAL_RESTING_LED_PATH", "/var/lib/hal/resting_led.json"
