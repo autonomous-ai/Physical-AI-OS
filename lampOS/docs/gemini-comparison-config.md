@@ -52,6 +52,9 @@ Other existing setup fields remain present. `thinkingConfig` belongs inside
 and [generation configuration schema](https://ai.google.dev/api/generate-content#generationconfig).
 The speech language field is distinct from input-transcription language hints;
 this change adds no STT hints, search, tools, resumption or thought output.
+The later [session reliability](gemini-session-reliability.md) work leaves this
+initial setup byte-identical. Only a reconnect that presents a server-issued
+handle adds `sessionResumption`; record that when a cohort includes a recovery.
 
 `ThinkingLevel` supports the explicit protocol values `MINIMAL`, `LOW`, `MEDIUM`
 and `HIGH`, with Rust variants `Minimal`, `Low`, `Medium` and `High`. Its `FromStr`

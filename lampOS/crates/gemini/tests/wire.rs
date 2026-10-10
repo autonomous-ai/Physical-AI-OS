@@ -1,7 +1,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use lamp_gemini::{
-    Credential, Error, GOOGLE_ENDPOINT, MAX_INPUT_SAMPLES, MAX_OUTPUT_SAMPLES, MAX_TEXT_BYTES,
-    MAX_WIRE_BYTES, SessionConfig, Timeouts, wire,
+    Credential, Error, GOOGLE_ENDPOINT, MAX_HANDLE_BYTES, MAX_INPUT_SAMPLES, MAX_OUTPUT_SAMPLES,
+    MAX_TEXT_BYTES, MAX_WIRE_BYTES, Resumption, SessionConfig, Timeouts, wire,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -56,6 +56,36 @@ fn configuration_rejects_insecure_or_credential_bearing_endpoints_and_redacts_de
             })
             .is_err()
     );
+    // Every wait has a ceiling; none can be configured away.
+    for timeouts in [
+        Timeouts {
+            barrier: Duration::from_secs(6),
+            ..Timeouts::default()
+        },
+        Timeouts {
+            stall: Duration::ZERO,
+            ..Timeouts::default()
+        },
+        Timeouts {
+            completion: Duration::from_secs(61),
+            ..Timeouts::default()
+        },
+        Timeouts {
+            turn: Duration::from_secs(601),
+            ..Timeouts::default()
+        },
+        Timeouts {
+            deliver: Duration::from_secs(11),
+            ..Timeouts::default()
+        },
+    ] {
+        assert!(
+            SessionConfig::google(Credential::api_key("key").unwrap())
+                .unwrap()
+                .timeouts(timeouts)
+                .is_err()
+        );
+    }
 }
 
 #[test]
@@ -171,7 +201,8 @@ fn resumption_updates_are_typed_bounded_metadata_and_never_retain_handles() {
         assert!(!frame.setup_complete);
         assert!(frame.content.is_none());
         assert!(frame.voice_activity.is_none());
-        assert!(!frame.go_away);
+        assert!(frame.go_away.is_none());
+        assert!(frame.resumption.is_none());
         assert!(!format!("{frame:?}").contains("PRIVATE-HANDLE"));
     }
     let oversized = json!({"sessionResumptionUpdate":{"newHandle":"x".repeat(MAX_WIRE_BYTES),"resumable":true}});
@@ -233,7 +264,8 @@ fn only_empty_json_objects_are_accepted_as_empty_server_messages() {
         assert!(!frame.setup_complete);
         assert!(frame.content.is_none());
         assert!(frame.voice_activity.is_none());
-        assert!(!frame.go_away);
+        assert!(frame.go_away.is_none());
+        assert!(frame.resumption.is_none());
     }
     let content = wire::decode_server(br#"{"serverContent":{}}"#)
         .unwrap()
@@ -263,5 +295,144 @@ fn only_empty_json_objects_are_accepted_as_empty_server_messages() {
             wire::decode_server(bytes).unwrap_err(),
             Error::MalformedMessage
         );
+    }
+}
+
+#[test]
+fn retaining_decode_keeps_only_a_resumable_bounded_handle_and_never_prints_it() {
+    let frame = wire::decode_server_retaining(
+        br#"{"sessionResumptionUpdate":{"newHandle":"PRIVATE-HANDLE","resumable":true}}"#,
+    )
+    .unwrap();
+    let update = frame.resumption.as_ref().unwrap();
+    assert!(update.resumable && update.handle.is_some());
+    assert!(!format!("{frame:?}").contains("PRIVATE-HANDLE"));
+    for (update, resumable) in [
+        (json!({}), false),
+        (json!({"newHandle":"", "resumable":true}), true),
+        (
+            json!({"newHandle":"PRIVATE-HANDLE", "resumable":false}),
+            false,
+        ),
+        (json!({"newHandle":"PRIVATE-HANDLE"}), false),
+        (
+            json!({"newHandle":"x".repeat(MAX_HANDLE_BYTES + 1), "resumable":true}),
+            true,
+        ),
+    ] {
+        let bytes = json!({"sessionResumptionUpdate": update}).to_string();
+        let update = wire::decode_server_retaining(bytes.as_bytes())
+            .unwrap()
+            .resumption
+            .unwrap();
+        assert!(update.handle.is_none());
+        assert_eq!(update.resumable, resumable);
+    }
+    // The same shape validation applies whether or not the handle is kept.
+    for bytes in [
+        br#"{"sessionResumptionUpdate":{"newHandle":7}}"#.as_slice(),
+        br#"{"sessionResumptionUpdate":["handle",true]}"#.as_slice(),
+        br#"{"sessionResumptionUpdate":{"newHandle":"a","newHandle":"b"}}"#.as_slice(),
+        br#"{"sessionResumptionUpdate":{"resumable":"true"}}"#.as_slice(),
+    ] {
+        assert_eq!(
+            wire::decode_server_retaining(bytes).unwrap_err(),
+            Error::MalformedMessage
+        );
+    }
+}
+
+#[test]
+fn resumption_enters_setup_only_when_requested_or_when_presenting_a_handle() {
+    let configuration = || {
+        SessionConfig::new(
+            GOOGLE_ENDPOINT,
+            Credential::api_key("NEVER-IN-JSON").unwrap(),
+        )
+    };
+    let setup = |configuration: &SessionConfig| -> Value {
+        serde_json::from_str(&wire::encode_setup(configuration).unwrap()).unwrap()
+    };
+    let default = setup(&configuration().unwrap());
+    let retain = setup(&configuration().unwrap().resumption(Resumption::Retain));
+    assert_eq!(default, retain);
+    assert!(default["setup"].get("sessionResumption").is_none());
+    let request = setup(&configuration().unwrap().resumption(Resumption::Request));
+    assert_eq!(request["setup"]["sessionResumption"], json!({}));
+    let handle = wire::decode_server_retaining(
+        br#"{"sessionResumptionUpdate":{"newHandle":"HANDLE-ONE","resumable":true}}"#,
+    )
+    .unwrap()
+    .resumption
+    .unwrap()
+    .handle;
+    let resumed = setup(&configuration().unwrap().resume(handle));
+    assert_eq!(
+        resumed["setup"]["sessionResumption"],
+        json!({"handle":"HANDLE-ONE"})
+    );
+    // Nothing else in the setup depends on resumption.
+    let mut without = resumed.clone();
+    without["setup"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sessionResumption");
+    assert_eq!(without, default);
+}
+
+#[test]
+fn go_away_notice_is_typed_and_its_duration_is_optional() {
+    for (notice, expected) in [
+        (json!({}), None),
+        (json!({"timeLeft":"30s"}), Some(Duration::from_secs(30))),
+        (
+            json!({"timeLeft":"1.500s"}),
+            Some(Duration::from_millis(1500)),
+        ),
+        (json!({"timeLeft":"soon"}), None),
+        (json!({"timeLeft":{"seconds":30}}), None),
+    ] {
+        let bytes = json!({"goAway": notice}).to_string();
+        let frame = wire::decode_server(bytes.as_bytes()).unwrap();
+        assert_eq!(frame.go_away.unwrap().time_left, expected);
+        assert!(frame.content.is_none());
+    }
+    for notice in [json!(true), json!("30s"), json!([]), json!(null)] {
+        let bytes = json!({"goAway": notice}).to_string();
+        assert_eq!(
+            wire::decode_server(bytes.as_bytes()).unwrap_err(),
+            Error::MalformedMessage
+        );
+    }
+}
+
+#[test]
+fn server_errors_map_to_fixed_categories_from_code_and_status_only() {
+    for (error, expected) in [
+        (
+            json!({"code":429,"message":"PRIVATE"}),
+            Error::QuotaExceeded,
+        ),
+        (
+            json!({"status":"RESOURCE_EXHAUSTED","message":"PRIVATE"}),
+            Error::QuotaExceeded,
+        ),
+        (json!({"code":503}), Error::ServerUnavailable),
+        (json!({"status":"INTERNAL"}), Error::ServerUnavailable),
+        (
+            json!({"code":403,"message":"PRIVATE"}),
+            Error::ServerRejected,
+        ),
+        (
+            json!({"code":400,"status":"INVALID_ARGUMENT"}),
+            Error::ServerRejected,
+        ),
+        (json!("PRIVATE"), Error::ServerRejected),
+        (json!({}), Error::ServerRejected),
+    ] {
+        let bytes = json!({"error": error}).to_string();
+        let decoded = wire::decode_server(bytes.as_bytes()).unwrap_err();
+        assert_eq!(decoded, expected);
+        assert!(!format!("{decoded:?} {decoded}").contains("PRIVATE"));
     }
 }

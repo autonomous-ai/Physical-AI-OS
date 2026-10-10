@@ -1,6 +1,6 @@
-use crate::{Error, MAX_TEXT_BYTES, Result};
+use crate::{Error, MAX_HANDLE_BYTES, MAX_TEXT_BYTES, Result};
 use serde::{Deserialize, Serialize};
-use std::{fmt, str::FromStr, time::Duration};
+use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest,
     handshake::client::Request,
@@ -9,6 +9,7 @@ use tokio_tungstenite::tungstenite::{
 
 pub const GOOGLE_ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
+#[derive(Clone)]
 pub struct Credential {
     name: HeaderName,
     value: HeaderValue,
@@ -43,14 +44,28 @@ impl fmt::Debug for Credential {
     }
 }
 
+/// Every wait is finite. These are failure bounds, not latency measurements.
 #[derive(Clone, Copy, Debug)]
 pub struct Timeouts {
     pub connect: Duration,
     pub setup: Duration,
     pub write: Duration,
     pub read: Duration,
+    /// Interruption request to the superseded response's idle completion. Only
+    /// the successor's activityEnd waits for it; its audio is never held.
     pub barrier: Duration,
+    /// Ended input to the first output of its response.
     pub response: Duration,
+    /// Longest silence between outputs before generation completes.
+    pub stall: Duration,
+    /// Allowance beyond the received audio's real-time duration for the idle
+    /// completion. The service defers it while it assumes playback.
+    pub completion: Duration,
+    /// Ended input to idle completion, whatever progress is observed.
+    pub turn: Duration,
+    /// How long decoded events may wait for the consumer before the session
+    /// fails. The socket is not read meanwhile, so nothing accumulates.
+    pub deliver: Duration,
     pub keepalive: Duration,
 }
 impl Default for Timeouts {
@@ -60,8 +75,12 @@ impl Default for Timeouts {
             setup: Duration::from_secs(10),
             write: Duration::from_millis(200),
             read: Duration::from_secs(60),
-            barrier: Duration::from_millis(800),
-            response: Duration::from_secs(90),
+            barrier: Duration::from_secs(2),
+            response: Duration::from_secs(30),
+            stall: Duration::from_secs(10),
+            completion: Duration::from_secs(15),
+            turn: Duration::from_secs(300),
+            deliver: Duration::from_secs(2),
             keepalive: Duration::from_secs(15),
         }
     }
@@ -73,8 +92,12 @@ impl Timeouts {
             (self.setup, Duration::from_secs(30)),
             (self.write, Duration::from_secs(1)),
             (self.read, Duration::from_secs(300)),
-            (self.barrier, Duration::from_secs(1)),
+            (self.barrier, Duration::from_secs(5)),
             (self.response, Duration::from_secs(300)),
+            (self.stall, Duration::from_secs(60)),
+            (self.completion, Duration::from_secs(60)),
+            (self.turn, Duration::from_secs(600)),
+            (self.deliver, Duration::from_secs(10)),
             (self.keepalive, Duration::from_secs(60)),
         ] {
             if duration < Duration::from_millis(1) || duration > max {
@@ -110,6 +133,50 @@ impl FromStr for ThinkingLevel {
     }
 }
 
+/// Whether the opaque server-issued session handle is kept for a reconnect.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Resumption {
+    /// Parse and discard every handle. Setup is unchanged.
+    #[default]
+    Off,
+    /// Keep the latest handle the service volunteers. Initial setup is
+    /// unchanged; only a reconnect that presents a handle differs.
+    Retain,
+    /// Also ask for handles in the initial setup.
+    Request,
+}
+
+/// What to do when an interrupted request produced no output and the service
+/// sends no terminal event for it before `Timeouts::barrier`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum UnansweredInterruption {
+    /// Fail the connection rather than guess which request owns later output.
+    #[default]
+    Fail,
+    /// Treat the silent request as cancelled and let its successor proceed.
+    /// Unverified against the live service; see the session reliability notes.
+    AssumeCancelled,
+}
+
+/// Opaque server token for resuming conversation state on a new connection.
+/// Held in memory only: no serialization, no value in Debug output.
+#[derive(Clone)]
+pub struct ResumptionHandle(Arc<str>);
+impl ResumptionHandle {
+    pub(crate) fn new(value: &str) -> Option<Self> {
+        (!value.is_empty() && value.len() <= MAX_HANDLE_BYTES).then(|| Self(value.into()))
+    }
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+impl fmt::Debug for ResumptionHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ResumptionHandle([PRIVATE])")
+    }
+}
+
+#[derive(Clone)]
 pub struct SessionConfig {
     pub(crate) endpoint: String,
     pub(crate) credential: Credential,
@@ -119,6 +186,9 @@ pub struct SessionConfig {
     pub(crate) language_code: Option<String>,
     pub(crate) instruction: String,
     pub(crate) timeouts: Timeouts,
+    pub(crate) resumption: Resumption,
+    pub(crate) resume: Option<ResumptionHandle>,
+    pub(crate) unanswered: UnansweredInterruption,
 }
 impl SessionConfig {
     /// Custom proxies are explicit WSS endpoints. Authentication belongs only in
@@ -134,6 +204,9 @@ impl SessionConfig {
             language_code: None,
             instruction: String::new(),
             timeouts: Timeouts::default(),
+            resumption: Resumption::Off,
+            resume: None,
+            unanswered: UnansweredInterruption::Fail,
         })
     }
     pub fn google(credential: Credential) -> Result<Self> {
@@ -181,6 +254,20 @@ impl SessionConfig {
         timeouts.validate()?;
         self.timeouts = timeouts;
         Ok(self)
+    }
+    pub fn resumption(mut self, resumption: Resumption) -> Self {
+        self.resumption = resumption;
+        self
+    }
+    /// Present a retained handle in setup. A handle is only ever obtained from
+    /// a connection whose configuration allowed retention.
+    pub fn resume(mut self, handle: Option<ResumptionHandle>) -> Self {
+        self.resume = handle;
+        self
+    }
+    pub fn unanswered_interruption(mut self, policy: UnansweredInterruption) -> Self {
+        self.unanswered = policy;
+        self
     }
     pub(crate) fn request(&self) -> Result<Request> {
         let mut request = self

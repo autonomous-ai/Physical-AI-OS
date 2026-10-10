@@ -1,11 +1,20 @@
 //! Cloud I/O stays in a separate process. Input is private, bounded and tied to
 //! its capture privacy generation; response lineage never follows a new turn.
+//!
+//! A lost provider connection is recovered here only when nothing accepted can
+//! be lost or repeated: while idle, or after an answer's generation completed
+//! and was delivered. Any other loss ends the worker with the request and the
+//! stage it had reached. Input is never replayed and no answer is requested
+//! twice. See `docs/gemini-session-reliability.md`.
 use crate::{
     config::ProviderConfig,
     transport::{Channel, WorkerChannels},
     wire::{Control, WorkerEvent},
 };
-use lamp_gemini::{Event, InputSender, RequestId, SessionId, State};
+use lamp_gemini::{
+    Connect, Dialer, Discard, Event, Failure, FailureReason, Notice, RecoveryPolicy, RequestId,
+    Resumption, State, Supervisor,
+};
 use lamp_interaction::{BootId, BoundaryGuard, MonoTime, Permission, Snapshot};
 use lamp_ipc::monotonic_us;
 use serde::{Deserialize, Serialize};
@@ -18,6 +27,13 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const MAX_QUEUED_OUTPUT: usize = 512;
+/// Above this backlog no further provider event is taken. The transport then
+/// stops reading its socket, so a fast or bursty service is held back by flow
+/// control instead of ending the worker. One event adds at most 50 packets.
+const OUTPUT_HIGH_WATER: usize = 384;
+/// Initial setup is unchanged. A handle the service volunteers is kept in this
+/// process's memory only, so a reconnect can restore the conversation.
+const RESUMPTION: Resumption = Resumption::Retain;
 const CONTROL_SLICE: usize = 16;
 const INPUT_SLICE: usize = 8;
 const RETAINED_INPUT_US: u64 = 100_000;
@@ -99,46 +115,48 @@ pub enum ProviderOutput {
     },
 }
 
-pub async fn run(mut channels: WorkerChannels, boot: BootId, config_path: &Path) -> Result<()> {
-    let config = ProviderConfig::load(config_path)?.into_session()?;
+pub async fn run(channels: WorkerChannels, boot: BootId, config_path: &Path) -> Result<()> {
+    let config = ProviderConfig::load(config_path)?
+        .into_session()?
+        .resumption(RESUMPTION);
+    let provider = Supervisor::new(Dialer::new(config), RecoveryPolicy::default())?;
+    serve(channels, boot, provider).await
+}
+
+async fn serve<C: Connect>(
+    mut channels: WorkerChannels,
+    boot: BootId,
+    mut provider: Supervisor<C>,
+) -> Result<()> {
     channels.control.send(WorkerEvent::Ready)?;
     let mut intake = ProviderIntake::new(boot, monotonic_us());
     let mut ticker = tokio::time::interval(Duration::from_millis(2));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let started = monotonic_us();
-    let connect = lamp_gemini::connect(config, SessionId::new(1)?);
-    tokio::pin!(connect);
-    let mut connection = loop {
-        tokio::select! {
-            result=&mut connect=>break result?,
-            _=ticker.tick()=>{
-                let mut control_budget = CONTROL_SLICE;
-                if intake.drain_control(&mut monotonic_us, &mut || channels.control.receive(), &mut control_budget)? == ControlDrain::Stopped { return Ok(()); }
-            }
-        }
-    };
-    let input = connection.input();
     let mut output = VecDeque::with_capacity(MAX_QUEUED_OUTPUT);
-    output.push_back(ProviderOutput::Ready {
-        setup_us: monotonic_us() - started,
-    });
     let mut output_sequence = 0u64;
+    let mut discards = DiscardLog::default();
     loop {
+        // Control is polled first and never waits for the provider: stop,
+        // privacy and retirement are serviced every tick whether a connection
+        // is ready, reconnecting or delivering a burst.
         tokio::select! {
             biased;
             _=ticker.tick()=>{
                 let mut control_budget = CONTROL_SLICE;
                 let control = intake.drain_control(&mut monotonic_us, &mut || channels.control.receive(), &mut control_budget)?;
-                if control == ControlDrain::Stopped { input.shutdown(); return Ok(()); }
-                let state = connection.state();
-                if state != State::Ready { return Err(connection_ended(state).into()); }
+                if control == ControlDrain::Stopped { provider.shutdown(); return Ok(()); }
                 // Local retirement cannot wait behind a full control slice.
-                intake.handoff.synchronize(&input)?;
+                intake.handoff.synchronize(&provider)?;
                 if control == ControlDrain::Deferred { continue; }
-                match intake.receive_inputs(&mut monotonic_us, &mut || channels.control.receive(), &mut channels.data, &input, &mut control_budget)? {
-                    ControlDrain::Stopped => { input.shutdown(); return Ok(()); }
-                    ControlDrain::Deferred => continue,
-                    ControlDrain::Empty => {}
+                let received = intake.receive_inputs(&mut monotonic_us, &mut || channels.control.receive(), &mut channels.data, &provider, &mut control_budget);
+                match received {
+                    Ok(ControlDrain::Stopped) => { provider.shutdown(); return Ok(()); }
+                    Ok(ControlDrain::Deferred) => continue,
+                    Ok(ControlDrain::Empty) => {}
+                    // Admitted input cannot be held until a connection exists:
+                    // it would be answered late or not at all. Say so and end.
+                    Err(error) if !provider.is_connected() => return Err(io::Error::other(format!("provider unavailable while input was admitted: {error}")).into()),
+                    Err(error) => return Err(error),
                 }
                 for _ in 0..8 {
                     let Some(front)=output.front() else {break;};
@@ -149,28 +167,126 @@ pub async fn run(mut channels: WorkerChannels, boot: BootId, config_path: &Path)
                     }
                 }
             },
-            event=connection.next_event()=>{
-                let event=event.ok_or_else(||connection_ended(connection.state()))?;
-                match event {
-                    Event::InputStarted {lineage,waiting_for_barrier}=>output.push_back(ProviderOutput::Started {request:lineage.request.get(),waiting_for_barrier}),
-                    Event::Audio {lineage,pcm,..}=>{
-                        let provider_event_at_us = monotonic_us();
-                        let source_frames = pcm.len();
-                        for (index, part) in pcm.chunks(960).enumerate() {
-                            output_sequence=output_sequence.checked_add(1).ok_or_else(||io::Error::other("provider output counter exhausted"))?;
-                            output.push_back(ProviderOutput::Audio {request:lineage.request.get(),sequence:output_sequence,provider_event_at_us,source_frames,source_offset:index*960,samples:part.to_vec()});
+            notice=provider.next(), if output.len() < OUTPUT_HIGH_WATER=>{
+                match notice {
+                    Ok(Notice::Ready {session,context,attempts,elapsed,after})=>{
+                        if let Some(error)=after {
+                            // The coordinator contract carries a recovery only as
+                            // a repeated Ready. Fixed categories, no server text.
+                            eprintln!("lamp-live provider: recovered after {error}; session={} context={context:?} attempts={attempts} outage_ms={}", session.get(), elapsed.as_millis());
                         }
+                        output.push_back(ProviderOutput::Ready { setup_us: elapsed.as_micros().try_into().unwrap_or(u64::MAX) });
                     },
-                    Event::OutputTranscript {lineage,text,finished}=>push_text(&mut output,Some(lineage.request.get()),text,finished),
-                    Event::UncorrelatedInputTranscript {text,finished,..}=>push_text(&mut output,None,text,finished),
-                    Event::ModelText {..}|Event::VoiceActivity {..}=>{},
-                    Event::GenerationComplete {lineage}=>output.push_back(ProviderOutput::GenerationComplete {request:lineage.request.get()}),
-                    Event::Interrupted {lineage}=>output.push_back(ProviderOutput::Interrupted {request:lineage.request.get()}),
-                    Event::TurnComplete {lineage,idle}=>output.push_back(ProviderOutput::TurnComplete {request:lineage.request.get(),idle}),
+                    Ok(Notice::Event(event))=>forward(event, &mut output, &mut output_sequence, &mut discards)?,
+                    Ok(Notice::Settled {lineage,error})=>{
+                        // Generation completed and every block was forwarded.
+                        // The closed connection is this request's idle barrier.
+                        eprintln!("lamp-live provider: request {} settled by {error} after generation completed", lineage.request.get());
+                        output.push_back(ProviderOutput::TurnComplete {request:lineage.request.get(),idle:true});
+                    },
+                    Ok(Notice::TurnLost {lineage,stage,error})=>return Err(io::Error::other(format!("{}; request {} was lost at {stage:?} and is not retried", connection_ended(State::Disconnected(error)), lineage.request.get())).into()),
+                    Err(failure)=>return Err(ended(failure).into()),
                 }
                 if output.len()>MAX_QUEUED_OUTPUT { return Err(io::Error::other("provider IPC output backlog exceeded bound").into()); }
             }
         }
+    }
+}
+
+fn forward(
+    event: Event,
+    output: &mut VecDeque<ProviderOutput>,
+    output_sequence: &mut u64,
+    discards: &mut DiscardLog,
+) -> Result<()> {
+    match event {
+        Event::InputStarted {
+            lineage,
+            waiting_for_barrier,
+        } => output.push_back(ProviderOutput::Started {
+            request: lineage.request.get(),
+            waiting_for_barrier,
+        }),
+        Event::Audio { lineage, pcm, .. } => {
+            let provider_event_at_us = monotonic_us();
+            let source_frames = pcm.len();
+            for (index, part) in pcm.chunks(960).enumerate() {
+                *output_sequence = output_sequence
+                    .checked_add(1)
+                    .ok_or_else(|| io::Error::other("provider output counter exhausted"))?;
+                output.push_back(ProviderOutput::Audio {
+                    request: lineage.request.get(),
+                    sequence: *output_sequence,
+                    provider_event_at_us,
+                    source_frames,
+                    source_offset: index * 960,
+                    samples: part.to_vec(),
+                });
+            }
+        }
+        Event::OutputTranscript {
+            lineage,
+            text,
+            finished,
+        } => push_text(output, Some(lineage.request.get()), text, finished),
+        Event::UncorrelatedInputTranscript { text, finished, .. } => {
+            push_text(output, None, text, finished);
+        }
+        Event::ModelText { .. } | Event::VoiceActivity { .. } => {}
+        Event::GenerationComplete { lineage } => {
+            output.push_back(ProviderOutput::GenerationComplete {
+                request: lineage.request.get(),
+            });
+        }
+        Event::Interrupted { lineage } => output.push_back(ProviderOutput::Interrupted {
+            request: lineage.request.get(),
+        }),
+        Event::TurnComplete { lineage, idle } => output.push_back(ProviderOutput::TurnComplete {
+            request: lineage.request.get(),
+            idle,
+        }),
+        Event::GoAway { time_left, .. } => eprintln!(
+            "lamp-live provider: service announced a close; time_left_ms={:?}",
+            time_left.map(|left| left.as_millis())
+        ),
+        Event::Discarded { reason, .. } => discards.note(reason),
+    }
+    Ok(())
+}
+
+/// Late provider events never reach the coordinator. Each kind is reported
+/// once per worker so a recurring pattern is visible without unbounded output.
+#[derive(Default)]
+struct DiscardLog {
+    seen: [bool; 5],
+}
+impl DiscardLog {
+    fn note(&mut self, reason: Discard) {
+        let index = match reason {
+            Discard::LateInterruption => 0,
+            Discard::LateTerminal => 1,
+            Discard::LateOutput => 2,
+            Discard::UnownedOutput => 3,
+            Discard::UnansweredBarrier => 4,
+        };
+        if !std::mem::replace(&mut self.seen[index], true) {
+            eprintln!(
+                "lamp-live provider: dropped a late provider event ({reason:?}); it changed no request"
+            );
+        }
+    }
+}
+
+/// Terminal provider failure as one line of fixed categories.
+fn ended(failure: Failure) -> io::Error {
+    match failure.reason {
+        FailureReason::Shutdown => connection_ended(State::Closed),
+        FailureReason::Lifecycle => connection_ended(State::Ready),
+        reason => io::Error::other(format!(
+            "{}; {reason:?} after {} recovery attempt(s)",
+            connection_ended(State::Disconnected(failure.error)),
+            failure.attempts
+        )),
     }
 }
 
@@ -502,8 +618,9 @@ impl InputHandoff {
     }
 }
 
-/// The production sink is the bounded Gemini command queue. The small seam lets
-/// regressions exercise cross-channel ordering without credentials or a socket.
+/// The production sink is the supervised connection's bounded command queue.
+/// The small seam lets regressions exercise cross-channel ordering without
+/// credentials or a socket.
 trait InputSink {
     fn start(&self, request: RequestId) -> lamp_gemini::Result<()>;
     fn audio(
@@ -517,7 +634,7 @@ trait InputSink {
     fn retire(&self, request: RequestId);
 }
 
-impl InputSink for InputSender {
+impl<C: Connect> InputSink for Supervisor<C> {
     fn start(&self, request: RequestId) -> lamp_gemini::Result<()> {
         self.try_start(request)
     }
@@ -534,7 +651,7 @@ impl InputSink for InputSender {
         self.try_end(request)
     }
     fn retire(&self, request: RequestId) {
-        InputSender::retire(self, request);
+        Supervisor::retire(self, request);
     }
 }
 
@@ -1481,5 +1598,532 @@ mod tests {
             connection_ended(State::Closed).to_string(),
             "provider connection closed locally"
         );
+    }
+
+    // ---- Supervised provider connection over real local IPC -------------
+    //
+    // The service is scripted in memory; no credential, TLS or cloud request.
+    // Authority uses the real monotonic clock because `serve` does.
+    use lamp_gemini::{
+        Credential, GOOGLE_ENDPOINT, SessionConfig,
+        testing::{Dial, audio as provider_audio, connector},
+    };
+    use serde_json::json;
+    use tokio::{sync::mpsc::UnboundedReceiver, task::JoinHandle};
+
+    struct LiveRig {
+        _directory: crate::process::SessionDirectory,
+        parent: WorkerChannels,
+        owner: Controller,
+        snapshot: Snapshot,
+        dials: UnboundedReceiver<Dial>,
+        worker: JoinHandle<Result<()>>,
+    }
+    fn real_time() -> MonoTime {
+        MonoTime::from_micros(monotonic_us())
+    }
+    impl LiveRig {
+        fn start(policy: RecoveryPolicy) -> Self {
+            let (directory, parent, worker) = intake_channels();
+            let boot = BootId::new([9; 16]).unwrap();
+            let mut owner = Controller::new(boot, real_time());
+            owner
+                .set_microphone_permission(real_time(), Permission::Allowed)
+                .unwrap();
+            let config =
+                SessionConfig::new(GOOGLE_ENDPOINT, Credential::api_key("test-only").unwrap())
+                    .unwrap()
+                    .resumption(RESUMPTION);
+            let (dialer, dials) = connector(config);
+            let provider = Supervisor::new(dialer, policy).unwrap();
+            let snapshot = owner.snapshot(real_time()).unwrap();
+            let mut rig = Self {
+                _directory: directory,
+                parent,
+                owner,
+                snapshot,
+                dials,
+                worker: tokio::spawn(serve(worker, boot, provider)),
+            };
+            rig.publish();
+            rig
+        }
+        /// One coordinator heartbeat: fresh input leases and authority.
+        fn publish(&mut self) {
+            self.heartbeat().unwrap();
+        }
+        fn heartbeat(&mut self) -> io::Result<()> {
+            let at = monotonic_us();
+            let now = MonoTime::from_micros(at);
+            let lease = MonoTime::from_micros(at + 100_000);
+            self.owner
+                .set_capture(now, CaptureState::RetainingUntil(lease))
+                .unwrap();
+            self.owner
+                .set_admission(now, AdmissionState::OpenUntil(lease))
+                .unwrap();
+            self.snapshot = self.owner.snapshot(now).unwrap();
+            self.parent.control.send(Control::Authority {
+                snapshot: self.snapshot,
+            })
+        }
+        async fn pump(&mut self, duration: Duration) {
+            let until = Instant::now() + duration;
+            while Instant::now() < until {
+                self.publish();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+        async fn output(&mut self) -> ProviderOutput {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                self.publish();
+                if let Some(output) = self.parent.data.receive::<ProviderOutput>().unwrap() {
+                    return output;
+                }
+                assert!(!self.worker.is_finished(), "worker ended before output");
+                assert!(Instant::now() < deadline, "no provider output in time");
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+        /// Heartbeat until the worker attempts a connection.
+        async fn dial(&mut self) -> Dial {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                self.publish();
+                if let Ok(dial) = self.dials.try_recv() {
+                    return dial;
+                }
+                assert!(Instant::now() < deadline, "no connection attempt in time");
+                tokio::time::sleep(Duration::from_millis(2)).await;
+            }
+        }
+        /// Heartbeat until the worker ends; its result and the wait.
+        async fn exit(&mut self) -> (Result<()>, Duration) {
+            let started = Instant::now();
+            while !self.worker.is_finished() {
+                assert!(started.elapsed() < Duration::from_secs(3), "worker hung");
+                // The worker may close its socket at any point from here on.
+                let _ = self.heartbeat();
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            ((&mut self.worker).await.unwrap(), started.elapsed())
+        }
+        /// Heartbeat until the scripted service has the worker's next message.
+        async fn service_message(&mut self, dial: &mut Dial) -> serde_json::Value {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                self.publish();
+                if let Some(message) = dial.service.try_receive(Duration::from_millis(5)).await {
+                    return message;
+                }
+                assert!(Instant::now() < deadline, "service saw no client message");
+            }
+        }
+        async fn ready(&mut self) -> Dial {
+            let mut dial = self.dial().await;
+            let setup = self.service_message(&mut dial).await;
+            assert_eq!(
+                setup["setup"].get("sessionResumption").is_some(),
+                dial.resumed
+            );
+            dial.service.send(json!({"setupComplete": {}})).await;
+            assert!(matches!(self.output().await, ProviderOutput::Ready { .. }));
+            dial
+        }
+        /// Admit a request and submit its start, one block and optional end.
+        async fn speak(&mut self, dial: &mut Dial, interruption: bool, end: bool) -> u64 {
+            let input = if interruption {
+                AdmittedInput::Interruption
+            } else {
+                AdmittedInput::NewTurn
+            };
+            let owner = self.owner.admit(real_time(), input).unwrap();
+            let request = owner.turn();
+            self.publish();
+            let privacy_generation = self.snapshot.microphone_generation();
+            self.parent
+                .data
+                .send(ProviderInput::Start {
+                    request,
+                    privacy_generation,
+                })
+                .unwrap();
+            self.parent
+                .data
+                .send(ProviderInput::Audio {
+                    request,
+                    privacy_generation,
+                    sequence: 1,
+                    read_completed_at_us: monotonic_us(),
+                    samples: vec![3; 160],
+                })
+                .unwrap();
+            assert!(matches!(
+                self.output().await,
+                ProviderOutput::Started { request: started, .. } if started == request
+            ));
+            if end {
+                self.owner.input_ended(real_time(), owner).unwrap();
+                self.publish();
+                self.parent
+                    .data
+                    .send(ProviderInput::End {
+                        request,
+                        privacy_generation,
+                    })
+                    .unwrap();
+            }
+            // The service sees exactly this request's boundaries and audio.
+            let mut expected = vec!["activityStart", "audio"];
+            if end {
+                expected.push("activityEnd");
+            }
+            for field in expected {
+                let message = self.service_message(dial).await;
+                assert!(
+                    message["realtimeInput"].get(field).is_some(),
+                    "expected {field}, service received {message}"
+                );
+            }
+            request
+        }
+    }
+    fn quick_policy() -> RecoveryPolicy {
+        RecoveryPolicy {
+            first_backoff: Duration::from_millis(20),
+            max_backoff: Duration::from_millis(40),
+            ..RecoveryPolicy::default()
+        }
+    }
+    fn resumable() -> serde_json::Value {
+        json!({"sessionResumptionUpdate":{"newHandle":"HANDLE-ONE","resumable":true}})
+    }
+    fn idle_complete() -> serde_json::Value {
+        json!({"serverContent":{"turnComplete":true,"interactionStatus":"IDLE"}})
+    }
+
+    #[tokio::test]
+    async fn complete_answer_then_idle_provider_loss_recovers_with_context_and_a_second_ready() {
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        dial.service.send(resumable()).await;
+        let request = rig.speak(&mut dial, false, true).await;
+        // 2,000 frames arrive as one provider message; the service then closes
+        // the idle session, as measured on V1 after 86-198 s without a turn.
+        dial.service.send(provider_audio(5, 2_000)).await;
+        dial.service
+            .send(json!({"serverContent":{"generationComplete":true}}))
+            .await;
+        dial.service.send(idle_complete()).await;
+        dial.service.close(1008, "The operation was aborted").await;
+        let mut frames = 0;
+        for offset in [0, 960, 1_920] {
+            let ProviderOutput::Audio {
+                request: owner,
+                source_frames,
+                source_offset,
+                samples,
+                ..
+            } = rig.output().await
+            else {
+                panic!("expected provider audio");
+            };
+            assert_eq!(
+                (owner, source_frames, source_offset),
+                (request, 2_000, offset)
+            );
+            assert!(samples.iter().all(|sample| *sample == 5));
+            frames += samples.len();
+        }
+        assert_eq!(frames, 2_000);
+        assert!(matches!(
+            rig.output().await,
+            ProviderOutput::GenerationComplete { request: done } if done == request
+        ));
+        assert!(matches!(
+            rig.output().await,
+            ProviderOutput::TurnComplete { request: done, idle: true } if done == request
+        ));
+        // The coordinator finishes the turn; the worker reconnects on its own.
+        let owner = rig.snapshot.owner().unwrap();
+        rig.owner.complete_turn(real_time(), owner).unwrap();
+        let mut redial = rig.ready().await;
+        assert!(redial.resumed);
+        assert_eq!(redial.session.get(), 2);
+        // The next question is served by the resumed session.
+        let next = rig.speak(&mut redial, false, true).await;
+        redial.service.send(provider_audio(6, 240)).await;
+        assert!(matches!(
+            rig.output().await,
+            ProviderOutput::Audio { request: owner, .. } if owner == next
+        ));
+        rig.parent.control.send(Control::Stop).unwrap();
+        assert!(rig.exit().await.0.is_ok());
+    }
+
+    #[tokio::test]
+    async fn answer_generated_before_the_service_closed_is_settled_not_failed() {
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        dial.service.send(resumable()).await;
+        let request = rig.speak(&mut dial, false, true).await;
+        dial.service.send(provider_audio(5, 480)).await;
+        dial.service
+            .send(json!({"serverContent":{"generationComplete":true}}))
+            .await;
+        dial.service.close(1008, "idle").await;
+        assert!(matches!(rig.output().await, ProviderOutput::Audio { .. }));
+        assert!(matches!(
+            rig.output().await,
+            ProviderOutput::GenerationComplete { .. }
+        ));
+        // No idle completion ever came from the service. The closed connection
+        // is the barrier, so the fully delivered answer can finish normally.
+        assert!(matches!(
+            rig.output().await,
+            ProviderOutput::TurnComplete { request: done, idle: true } if done == request
+        ));
+        rig.ready().await;
+    }
+
+    #[tokio::test]
+    async fn provider_loss_before_an_answer_completes_ends_the_worker_naming_request_and_stage() {
+        for (stage, expected) in [(0, "InputOpen"), (1, "AwaitingResponse"), (2, "Responding")] {
+            let mut rig = LiveRig::start(quick_policy());
+            let mut dial = rig.ready().await;
+            dial.service.send(resumable()).await;
+            let request = rig.speak(&mut dial, false, stage > 0).await;
+            if stage == 2 {
+                dial.service.send(provider_audio(5, 480)).await;
+                assert!(matches!(rig.output().await, ProviderOutput::Audio { .. }));
+            }
+            dial.service.close(1011, "PRIVATE BACKEND DETAIL").await;
+            let (result, _) = rig.exit().await;
+            let message = result.unwrap_err().to_string();
+            assert!(
+                message.contains("PeerClosed { code: Some(1011) }"),
+                "{message}"
+            );
+            assert!(
+                message.contains(&format!("request {request} was lost at {expected}")),
+                "{message}"
+            );
+            assert!(!message.contains("PRIVATE"));
+            // Nothing was replayed anywhere: no further connection was dialed.
+            assert!(rig.dials.try_recv().is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_and_heartbeat_are_serviced_while_a_reconnect_hangs() {
+        let mut rig = LiveRig::start(RecoveryPolicy {
+            outage_budget: Duration::from_secs(5),
+            ..quick_policy()
+        });
+        let mut dial = rig.ready().await;
+        dial.service.send(resumable()).await;
+        dial.service.close(1008, "idle").await;
+        // The service never answers the reconnect. For longer than the 250 ms
+        // controller heartbeat bound the worker must keep draining control.
+        let _hung = rig.dial().await;
+        rig.pump(Duration::from_millis(400)).await;
+        assert!(!rig.worker.is_finished());
+        assert!(
+            rig.parent
+                .data
+                .receive::<ProviderOutput>()
+                .unwrap()
+                .is_none()
+        );
+        rig.parent.control.send(Control::Stop).unwrap();
+        let (result, waited) = rig.exit().await;
+        assert!(result.is_ok());
+        println!(
+            "MEASURED stop_during_hung_reconnect_us={} (local socket send to worker task end, host)",
+            waited.as_micros()
+        );
+        assert!(waited < Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn input_admitted_during_an_outage_ends_the_worker_instead_of_being_held() {
+        let mut rig = LiveRig::start(RecoveryPolicy {
+            outage_budget: Duration::from_secs(5),
+            ..quick_policy()
+        });
+        let mut dial = rig.ready().await;
+        dial.service.send(resumable()).await;
+        dial.service.close(1008, "idle").await;
+        let _hung = rig.dial().await;
+        let owner = rig
+            .owner
+            .admit(real_time(), AdmittedInput::NewTurn)
+            .unwrap();
+        rig.publish();
+        rig.parent
+            .data
+            .send(ProviderInput::Start {
+                request: owner.turn(),
+                privacy_generation: rig.snapshot.microphone_generation(),
+            })
+            .unwrap();
+        let message = rig.exit().await.0.unwrap_err().to_string();
+        assert!(
+            message.contains("provider unavailable while input was admitted"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_recovery_and_quota_end_with_fixed_categories() {
+        let mut rig = LiveRig::start(RecoveryPolicy {
+            max_attempts: 2,
+            ..quick_policy()
+        });
+        let mut dial = rig.ready().await;
+        dial.service.send(resumable()).await;
+        dial.service.close(1008, "idle").await;
+        drop(rig.dial().await);
+        drop(rig.dial().await);
+        let message = rig.exit().await.0.unwrap_err().to_string();
+        assert!(
+            message.contains("AttemptsExhausted after 2 recovery attempt(s)"),
+            "{message}"
+        );
+
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        dial.service.send(resumable()).await;
+        dial.service
+            .close(1011, "You exceeded your current quota PRIVATE")
+            .await;
+        let message = rig.exit().await.0.unwrap_err().to_string();
+        assert_eq!(
+            message,
+            "provider connection ended: Gemini Live QuotaExceeded; NotRecoverable after 0 recovery attempt(s)"
+        );
+
+        // No handle was ever issued: the conversation could not be restored,
+        // so the loss is reported rather than hidden behind a fresh session.
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        dial.service.close(1008, "idle").await;
+        let message = rig.exit().await.0.unwrap_err().to_string();
+        assert!(message.contains("NoResumableContext"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn fast_provider_burst_is_held_by_flow_control_and_arrives_complete_in_order() {
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        let request = rig.speak(&mut dial, false, true).await;
+        // 80 s of speech offered at once: 40 provider messages of 2 s each,
+        // 2,000 IPC packets. This worker forwards at most 8 packets per 2 ms
+        // tick, so its backlog would pass the 512-packet bound that used to
+        // end it. The IPC freshness rule means the coordinator side must keep
+        // reading; it does, as fast as packets arrive.
+        const MESSAGES: usize = 40;
+        const FRAMES: usize = lamp_gemini::MAX_OUTPUT_SAMPLES;
+        let mut service = dial.service;
+        let script = tokio::spawn(async move {
+            service
+                .burst((0..MESSAGES).map(|index| provider_audio(index as i16, FRAMES)))
+                .await;
+            service.send(idle_complete()).await;
+            service
+        });
+        let started = Instant::now();
+        let (mut packets, mut last_sequence, mut frames) = (0, 0, 0usize);
+        loop {
+            match rig.output().await {
+                ProviderOutput::Audio {
+                    request: owner,
+                    sequence,
+                    source_offset,
+                    samples,
+                    ..
+                } => {
+                    if packets == 0 {
+                        // Backpressure reached the service: with most of the
+                        // burst unread it is still blocked on its socket.
+                        assert!(!script.is_finished());
+                    }
+                    assert_eq!(owner, request);
+                    assert!(sequence > last_sequence);
+                    last_sequence = sequence;
+                    // Every block carries its message index: none is lost,
+                    // duplicated or reordered.
+                    let expected = (frames / FRAMES) as i16;
+                    assert_eq!(source_offset, frames % FRAMES);
+                    assert!(samples.iter().all(|sample| *sample == expected));
+                    frames += samples.len();
+                    packets += 1;
+                }
+                ProviderOutput::TurnComplete { idle: true, .. } => break,
+                other => panic!("unexpected provider output: {other:?}"),
+            }
+        }
+        assert_eq!((packets, frames), (MESSAGES * 50, MESSAGES * FRAMES));
+        println!(
+            "MEASURED burst_80s_audio_2000_packets_delivered_ms={} (scripted service to local IPC reader, host)",
+            started.elapsed().as_millis()
+        );
+        let _service = script.await.unwrap();
+        rig.parent.control.send(Control::Stop).unwrap();
+        assert!(rig.exit().await.0.is_ok());
+    }
+
+    #[tokio::test]
+    async fn late_provider_events_never_reach_the_coordinator_for_a_newer_request() {
+        let mut rig = LiveRig::start(quick_policy());
+        let mut dial = rig.ready().await;
+        let first = rig.speak(&mut dial, false, true).await;
+        dial.service.send(provider_audio(5, 240)).await;
+        dial.service.send(idle_complete()).await;
+        assert!(matches!(rig.output().await, ProviderOutput::Audio { .. }));
+        assert!(matches!(
+            rig.output().await,
+            ProviderOutput::TurnComplete { request, idle: true } if request == first
+        ));
+        let owner = rig.snapshot.owner().unwrap();
+        rig.owner.complete_turn(real_time(), owner).unwrap();
+        // The person starts a follow-up. The interruption that its explicit
+        // activityStart requested, and a duplicate completion, arrive late.
+        let second = rig.speak(&mut dial, false, false).await;
+        dial.service
+            .send(json!({"serverContent":{"interrupted":true}}))
+            .await;
+        dial.service.send(idle_complete()).await;
+        dial.service.send(provider_audio(66, 240)).await;
+        rig.pump(Duration::from_millis(120)).await;
+        assert!(
+            rig.parent
+                .data
+                .receive::<ProviderOutput>()
+                .unwrap()
+                .is_none()
+        );
+        // The follow-up ends and is answered under its own identity only.
+        let owner = rig.snapshot.owner().unwrap();
+        rig.owner.input_ended(real_time(), owner).unwrap();
+        rig.publish();
+        rig.parent
+            .data
+            .send(ProviderInput::End {
+                request: second,
+                privacy_generation: rig.snapshot.microphone_generation(),
+            })
+            .unwrap();
+        rig.pump(Duration::from_millis(40)).await;
+        dial.service.send(provider_audio(7, 240)).await;
+        let ProviderOutput::Audio {
+            request, samples, ..
+        } = rig.output().await
+        else {
+            panic!("expected the follow-up answer");
+        };
+        assert_eq!(request, second);
+        assert!(samples.iter().all(|sample| *sample == 7));
     }
 }
