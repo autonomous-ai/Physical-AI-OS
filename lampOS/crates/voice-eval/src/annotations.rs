@@ -4,6 +4,7 @@
 use crate::{
     Result,
     evaluate::Metric,
+    import::{VerifiedRoom, verify_room_evidence},
     invalid,
     record::{AttemptRecord, StepStatus},
 };
@@ -58,6 +59,28 @@ pub struct StepAnnotation {
     pub notes: Option<String>,
 }
 
+impl StepAnnotation {
+    fn values_valid(&self, duration_s: f64) -> bool {
+        let boundaries = [
+            self.user_speech_end_s,
+            self.first_substantive_answer_word_s,
+            self.interruption_onset_s,
+            self.lamp_silent_s,
+        ];
+        let uncertainties = [
+            self.user_speech_end_uncertainty_ms,
+            self.answer_onset_uncertainty_ms,
+            self.silence_uncertainty_ms,
+        ];
+        boundaries
+            .into_iter()
+            .all(|v| v.is_none_or(|v| v.is_finite() && (0.0..=duration_s).contains(&v)))
+            && uncertainties.into_iter().all(|v| {
+                v.is_none_or(|v| v.is_finite() && (0.0..=duration_s * 1000.0).contains(&v))
+            })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AcousticScore {
     pub step: String,
@@ -99,19 +122,9 @@ impl Annotations {
         if annotations.schema != SCHEMA {
             return Err(invalid("unsupported annotation schema"));
         }
-        let finite = |value: Option<f64>| value.is_none_or(|v| v.is_finite() && v >= 0.0);
         for (attempt, entry) in &annotations.attempts {
             for (step, s) in &entry.steps {
-                let values = [
-                    s.user_speech_end_s,
-                    s.user_speech_end_uncertainty_ms,
-                    s.first_substantive_answer_word_s,
-                    s.answer_onset_uncertainty_ms,
-                    s.interruption_onset_s,
-                    s.lamp_silent_s,
-                    s.silence_uncertainty_ms,
-                ];
-                if !values.into_iter().all(finite) {
+                if !s.values_valid(f64::MAX / 1000.0) {
                     return Err(invalid(&format!(
                         "invalid annotation time in {attempt}/{step}"
                     )));
@@ -121,17 +134,47 @@ impl Annotations {
         Ok(annotations)
     }
 
+    fn verified_attempt<'a>(
+        &'a self,
+        record: &AttemptRecord,
+    ) -> Result<(&'a AttemptAnnotation, VerifiedRoom)> {
+        if !record.stratum.is_physical() {
+            return Err(invalid("no room audio: fake runtime"));
+        }
+        let entry = self
+            .attempts
+            .get(&record.attempt_id)
+            .ok_or_else(|| invalid("no annotation for this attempt"))?;
+        if self.schema != SCHEMA || self.run_id != record.run_id {
+            return Err(invalid(
+                "annotation schema or run_id does not match this attempt",
+            ));
+        }
+        if !entry.listened {
+            return Err(invalid("attempt not listened to"));
+        }
+        let room = record
+            .evidence
+            .get("room_audio")
+            .filter(|room| !room.is_null())
+            .ok_or_else(|| invalid("no continuous room recording"))?;
+        let verified = verify_room_evidence(room)?;
+        if entry.room_recording_sha256.as_deref() != Some(verified.sha256.as_str()) {
+            return Err(invalid("annotation refers to a different room recording"));
+        }
+        Ok((entry, verified))
+    }
+
     /// The step's annotation, only when it may be used: physical attempt,
-    /// valid room recording, listened, and the annotation names that recording.
+    /// reverified room recording, matching run/hash, listened, and finite
+    /// in-recording values. Reversed intervals invalidate timing, not an
+    /// independent content judgment from this same valid recording.
     pub fn reviewed_step(&self, record: &AttemptRecord, step: &str) -> Option<&StepAnnotation> {
-        let (sha256, valid) = room_audio(record)?;
-        let entry = self.attempts.get(&record.attempt_id)?;
-        (record.stratum.is_physical()
-            && valid
-            && entry.listened
-            && entry.room_recording_sha256.as_deref() == Some(sha256))
-        .then(|| entry.steps.get(step))
-        .flatten()
+        let (entry, verified) = self.verified_attempt(record).ok()?;
+        entry
+            .steps
+            .get(step)
+            .filter(|s| s.values_valid(verified.duration_s))
     }
 
     pub fn score(&self, record: &AttemptRecord) -> Vec<AcousticScore> {
@@ -145,30 +188,23 @@ impl Annotations {
                 .map(|s| AcousticScore::unscored(&s.step, reason))
                 .collect()
         };
-        if !record.stratum.is_physical() {
-            return unscored("no room audio: fake runtime");
-        }
-        let Some((sha256, valid)) = room_audio(record) else {
-            return unscored("no continuous room recording");
+        let (entry, verified) = match self.verified_attempt(record) {
+            Ok(value) => value,
+            Err(error) => return unscored(&error.to_string()),
         };
-        if !valid {
-            return unscored("room recording failed its integrity checks");
-        }
-        let Some(entry) = self.attempts.get(&record.attempt_id) else {
-            return unscored("no annotation for this attempt");
-        };
-        if !entry.listened {
-            return unscored("attempt not listened to");
-        }
-        if entry.room_recording_sha256.as_deref() != Some(sha256) {
-            return unscored("annotation refers to a different room recording");
-        }
         let mut scores = Vec::new();
         for step in steps {
             let Some(s) = entry.steps.get(&step.step) else {
                 scores.push(AcousticScore::unscored(&step.step, "step not annotated"));
                 continue;
             };
+            if !s.values_valid(verified.duration_s) {
+                scores.push(AcousticScore::unscored(
+                    &step.step,
+                    "annotation has nonfinite or out-of-recording values",
+                ));
+                continue;
+            }
             let mut scored = false;
             if s.user_speech_end_s
                 .zip(s.first_substantive_answer_word_s)

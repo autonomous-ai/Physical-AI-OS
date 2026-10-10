@@ -237,8 +237,14 @@ fn provider_mismatch_and_unknown_turns_are_rejected_on_import() {
     }
 }
 
-fn room(sha: &str) -> Value {
-    json!({"valid": true, "status": "captured_unscored", "room_wav_sha256": sha, "start_requested_host_ns": 1_000_000_000_u64})
+// Synthetic silence validates the evidence path only; no physical speech is
+// measured by these annotation regression tests.
+fn room(dir: &Path) -> (Value, String) {
+    let wav = dir.join("room.wav");
+    lamp_acoustic::write_wave(&wav, &vec![0.0; 160_000]).unwrap();
+    let sha = lamp_acoustic::hash(&fs::read(wav).unwrap());
+    let metadata = json!({"valid": true, "status": "captured_unscored", "room_wav_sha256": sha, "start_requested_host_ns": 1_000_000_000_u64});
+    (metadata, sha)
 }
 
 fn annotation(listened: bool, sha: &str, step: StepAnnotation) -> Annotations {
@@ -266,13 +272,13 @@ fn annotation(listened: bool, sha: &str, step: StepAnnotation) -> Annotations {
 #[test]
 fn acoustic_latency_requires_a_listened_annotation_of_the_same_recording() {
     let dir = common::Private::new("ac");
-    let sha = "a".repeat(64);
+    let (metadata, sha) = room(&dir.path);
     let record = import(
         &dir.path,
         "ac",
         "fixed-reply-echo-only",
         &h4_trace(),
-        Some(room(&sha)),
+        Some(metadata),
     );
     let boundaries = StepAnnotation {
         user_speech_end_s: Some(5.53),
@@ -315,6 +321,7 @@ fn acoustic_latency_requires_a_listened_annotation_of_the_same_recording() {
         (
             Annotations {
                 schema: 1,
+                run_id: record.run_id.clone(),
                 ..Annotations::default()
             },
             "no annotation",
@@ -344,11 +351,16 @@ fn acoustic_latency_requires_a_listened_annotation_of_the_same_recording() {
         &h4_trace(),
         Some(json!({"valid": false, "room_wav_sha256": sha})),
     );
-    let score = evaluate::score(
-        &invalid_room,
-        15_000,
-        Some(&annotation(true, &sha, boundaries)),
-    );
+    let mut invalid_annotation = annotation(true, &sha, boundaries);
+    invalid_annotation.run_id = invalid_room.run_id.clone();
+    let entry = invalid_annotation
+        .attempts
+        .remove("ac-import-fixed-reply-echo-only")
+        .unwrap();
+    invalid_annotation
+        .attempts
+        .insert(invalid_room.attempt_id.clone(), entry);
+    let score = evaluate::score(&invalid_room, 15_000, Some(&invalid_annotation));
     assert!(
         score.acoustic[0]
             .unscored_reason
@@ -586,13 +598,13 @@ fn a_trace_with_run_start_but_no_run_end_is_not_scored() {
 #[test]
 fn reviewer_judgments_fail_and_negative_intervals_stay_unscored() {
     let dir = common::Private::new("rev");
-    let sha = "c".repeat(64);
+    let (metadata, sha) = room(&dir.path);
     let record = import(
         &dir.path,
         "rv",
         "fixed-reply-echo-only",
         &h4_trace(),
-        Some(room(&sha)),
+        Some(metadata),
     );
     let mut annotations = annotation(
         true,
@@ -604,6 +616,7 @@ fn reviewer_judgments_fail_and_negative_intervals_stay_unscored() {
             ..StepAnnotation::default()
         },
     );
+    annotations.run_id = record.run_id.clone();
     let entry = annotations
         .attempts
         .remove("ac-import-fixed-reply-echo-only")

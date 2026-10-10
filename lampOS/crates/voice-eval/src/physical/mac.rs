@@ -7,7 +7,7 @@
 use crate::{
     Result,
     events::{ClockDomain, EventKind, EventSource, RuntimeEvent, from_trace, parse_cue},
-    import::room_evidence,
+    import::load_room_evidence,
     invalid,
     physical::{
         fake_lamp::ROOM_MAX_BYTES,
@@ -739,24 +739,14 @@ impl Backend for PhysicalBackend<'_> {
                     &mut child,
                     monotonic_us() + (u64::from(self.seconds) + 60) * 1_000_000,
                 );
-                match fs::read(out.join("metadata.json"))
-                    .ok()
-                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-                {
-                    Some(metadata) => {
-                        let mut evidence = room_evidence(
-                            &metadata,
-                            self.config.room_independent,
-                            &out.display().to_string(),
-                        );
-                        evidence["recorder_spawn_runner_us"] = json!(requested);
-                        evidence["recorder_exit"] = json!(status.map(|s| s.code()));
-                        evidence
-                    }
-                    None => {
-                        json!({"valid": false, "sha256": null, "status": "no final metadata.json", "path": out.display().to_string()})
-                    }
-                }
+                let mut evidence = load_room_evidence(
+                    &out.join("metadata.json"),
+                    self.config.room_independent,
+                    Some(status.is_some_and(|s| s.success())),
+                );
+                evidence["recorder_spawn_runner_us"] = json!(requested);
+                evidence["recorder_exit"] = json!(status.and_then(|s| s.code()));
+                evidence
             }
             None => Value::Null,
         };

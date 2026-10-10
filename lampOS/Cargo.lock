@@ -768,6 +768,7 @@ dependencies = [
  "lamp-ipc",
  "lamp-live",
  "lamp-observer",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
