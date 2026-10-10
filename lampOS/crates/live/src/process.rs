@@ -9,7 +9,7 @@ use lamp_interaction::BootId;
 use std::{
     fs,
     io::{self, Read},
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     time::{Duration, Instant},
@@ -140,7 +140,7 @@ impl Worker {
         let peer_d = directory.join(format!("{role}.d.w"));
         // Startup waits run before listening readiness is advertised. A later
         // recovery must use a separate supervisor path, never block live audio.
-        while !(peer_c.exists() && peer_d.exists()) {
+        while !peer_sockets_ready(&[&peer_c, &peer_d])? {
             on_wait()?;
             worker.check_running()?;
             if Instant::now() >= deadline {
@@ -252,6 +252,84 @@ impl Worker {
             Err(error) => message.push_str(&format!("; reap failed: {error}")),
         }
         io::Error::new(kind, message)
+    }
+}
+
+/// `bind` publishes a pathname before Endpoint finishes setting mode 0600.
+/// Do not race that finalization or connect one half of the channel pair first.
+/// This runs only inside the existing bounded pre-readiness startup loop.
+fn peer_sockets_ready(paths: &[&Path]) -> io::Result<bool> {
+    let mut ready = true;
+    for path in paths {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                ready = false;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        if !metadata.file_type().is_socket()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "worker peer must be a socket owned by this user",
+            ));
+        }
+        // A permanently unprivate socket is never connected; startup times out.
+        ready &= metadata.mode() & 0o077 == 0;
+    }
+    Ok(ready)
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+    use std::os::unix::{fs::symlink, net::UnixDatagram};
+
+    #[test]
+    fn startup_waits_for_both_sockets_to_finish_becoming_private() {
+        let directory = SessionDirectory::create().unwrap();
+        let control = directory.path.join("c");
+        let data = directory.path.join("d");
+        let paths = [control.as_path(), data.as_path()];
+        assert!(!peer_sockets_ready(&paths).unwrap());
+        let c = UnixDatagram::bind(&control).unwrap();
+        let d = UnixDatagram::bind(&data).unwrap();
+        fs::set_permissions(&control, fs::Permissions::from_mode(0o666)).unwrap();
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(!peer_sockets_ready(&paths).unwrap());
+        fs::set_permissions(&control, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!peer_sockets_ready(&paths).unwrap());
+        fs::set_permissions(&data, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(peer_sockets_ready(&paths).unwrap());
+        drop((c, d));
+        fs::remove_file(control).unwrap();
+        fs::remove_file(data).unwrap();
+    }
+
+    #[test]
+    fn startup_rejects_files_and_symlinks_instead_of_calling_them_ready() {
+        let directory = SessionDirectory::create().unwrap();
+        let path = directory.path.join("peer");
+        fs::write(&path, []).unwrap();
+        assert_eq!(
+            peer_sockets_ready(&[&path]).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::remove_file(&path).unwrap();
+        let bound = directory.path.join("bound");
+        let peer = UnixDatagram::bind(&bound).unwrap();
+        fs::set_permissions(&bound, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&bound, &path).unwrap();
+        assert_eq!(
+            peer_sockets_ready(&[&path]).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        drop(peer);
+        fs::remove_file(path).unwrap();
+        fs::remove_file(bound).unwrap();
     }
 }
 impl Drop for Worker {
